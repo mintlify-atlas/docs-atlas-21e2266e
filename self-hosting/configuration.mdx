@@ -1,5 +1,5 @@
 ---
-title: "SkillTanki Backend Configuration Reference"
+title: "SkillTanki Backend Configuration Variable Reference"
 sidebarTitle: "Configuration"
 description: "All CC_* environment variables for the self-hosted Bun backend — Redis, MongoDB, MinIO, room limits, ICE/TURN, logging, and process layout."
 ---
@@ -46,6 +46,20 @@ cp packages/backend/.env.example packages/backend/.env
   in addition to console output, not instead of it.
 
   Keep `0` if you collect logs from stdout (e.g. via pm2 or systemd's journal).
+</ParamField>
+
+<ParamField path="CC_DEV_SEED" type="0 | 1" default="0">
+  Set to `1` to enable the `PUT /__dev/assets/*` route, which writes a request
+  body directly into the MinIO bucket under the given key. This route is used
+  by `scripts/upload-assets.mjs` when seeding a local backend instance during
+  development (the `--local` flag targets it instead of calling MinIO directly).
+
+  **Never set this in production.** When `CC_DEV_SEED` is not `1` the route
+  returns `404` for all `PUT /__dev/assets/*` requests.
+
+  ```bash
+  CC_DEV_SEED=1 npm run dev:backend
+  ```
 </ParamField>
 
 ---

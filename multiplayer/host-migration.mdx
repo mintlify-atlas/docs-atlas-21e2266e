@@ -1,5 +1,5 @@
 ---
-title: "Host Migration and Reconnect in SkillTanki"
+title: "SkillTanki Host Migration, Reconnect, and Seat Rejoin"
 sidebarTitle: "Host Migration"
 description: "When the host disconnects, the next peer by join order becomes host automatically. Dropped players can rejoin the same tank within the rejoin TTL."
 ---
@@ -83,6 +83,21 @@ export interface PeerJoinedMessage {
 The `rejoined: true` flag is important: the player's previous `RTCPeerConnection` objects are gone because the browser context was reloaded. Every other peer must create a fresh connection to the returned player — the mesh re-establishes itself automatically via new offer/answer exchanges through the signalling socket.
 
 If the token is rejected (expired or already freed), the server returns an `error` with code `bad_token`. The client then falls back to a fresh `join` without a token and takes a new seat.
+
+---
+
+## WebSocket close codes
+
+The server closes the signalling socket with a specific code that the client uses to decide whether to attempt a reconnect with its stored token.
+
+| Code | Reason string | Meaning |
+|------|---------------|---------|
+| `1001` | `server restart` | The self-hosted backend is shutting down orderly (SIGTERM / SIGINT — a deploy or restart). The peer's seat is preserved for the rejoin TTL; the client should reconnect with its token to a surviving or respawned process. |
+| `4001` | `replaced` | The same player reconnected from another tab or browser context while this socket was still open. The older socket is closed; the newer one carries the seat. The affected client should not reconnect. |
+
+<Note>
+  Close code `1001` is only emitted by the self-hosted `packages/backend` on an orderly shutdown. The Cloudflare Worker backend (`apps/server`) does not send a supervised shutdown signal; its Durable Objects are evicted silently by the runtime. In both cases a non-fatal close (any code other than `1000`, `4000`, or `4001`) causes the client to attempt to reconnect with the stored token.
+</Note>
 
 ---
 

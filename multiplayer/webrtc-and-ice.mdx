@@ -1,5 +1,5 @@
 ---
-title: "WebRTC Mesh and ICE Configuration in SkillTanki"
+title: "SkillTanki WebRTC Mesh and ICE Server Configuration"
 sidebarTitle: "WebRTC & ICE"
 description: "SkillTanki uses a full WebRTC data-channel mesh. The backend only signals — tanks communicate directly. Learn the mesh model, ICE setup, and TURN relay."
 ---
@@ -112,7 +112,7 @@ All socket frames are UTF-8 JSON. Binary frames are not used. The socket is sequ
 
 ## `hostEpoch`
 
-Every `welcome` and `hostChanged` message carries a `hostEpoch` integer. The epoch starts at `1` when the room is created and increments each time a host migration occurs.
+Every `welcome` and `hostChanged` message carries a `hostEpoch` integer. The epoch starts at `0` when the room is created and increments by one each time a host migration occurs.
 
 ```typescript
 // In WelcomeMessage and HostChangedMessage:

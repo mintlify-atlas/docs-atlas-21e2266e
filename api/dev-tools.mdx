@@ -1,5 +1,5 @@
 ---
-title: "SkillTanki Development Tools and Debug Aids"
+title: "SkillTanki Dev Tools: Console Globals and URL Params"
 sidebarTitle: "Dev Tools"
 description: "Browser console globals, URL query parameters for debugging, headless bot benchmarks, mock room fixtures, and the virtual gamepad simulator."
 ---
@@ -37,7 +37,7 @@ Append these to the local game URL (`http://localhost:5173`) to activate specifi
 
     | Parameter | Description |
     |---|---|
-    | `bench` | Battle mode to run: `dm`, `tdm`, `ctf`, `assault`, or `explore` |
+    | `bench` | Battle mode to run: `dm`, `tdm`, `ctf`, `assault`, or `nav` (navigation-only grid benchmark) |
     | `map` | Map ID from `assets/maps.json`, e.g. `island_old_summer` |
     | `bots` | Number of bots (1–11) |
     | `seconds` | Battle duration in seconds |
@@ -82,10 +82,14 @@ This runs a 3-minute Capture the Flag battle on Island with 6 bots, using RNG se
 | Field | Description |
 |---|---|
 | `drownings` | Number of tanks that fell into water or off the map |
-| `captures` | Flag captures (CTF/Assault modes) |
-| `stuck` | Stuck events: times a bot triggered the stuck-tank recovery routine |
+| `capturesByTeam` | Flag captures per team, keyed by team name (CTF/Assault modes) |
+| `flagEvents` | Count of each flag event type (`taken`, `dropped`, `returned`, etc.) |
+| `stuckEvents` | Times a bot triggered the stuck-tank recovery routine |
 | `pathFailures` | Pathfinding failures: navigation requests that returned no path |
-| `tickTimeMs` | Average simulation tick time in milliseconds |
+| `pathRequests` | Total pathfinding requests made during the run |
+| `avgTickMs` | Average bot think time per tick, in milliseconds |
+| `maxTickMs` | Worst-case bot think time in any single tick, in milliseconds |
+| `gridBuildMs` | Time in milliseconds to build the navigation grid for this map |
 
 Run the same seed before and after an AI change to compare the reports and confirm there are no regressions in path quality or stuck frequency.
 

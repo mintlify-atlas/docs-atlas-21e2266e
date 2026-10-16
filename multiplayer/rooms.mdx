@@ -1,5 +1,5 @@
 ---
-title: "Rooms: Creating and Joining Multiplayer Battles"
+title: "SkillTanki Rooms: Create and Join Multiplayer Battles"
 sidebarTitle: "Rooms"
 description: "SkillTanki rooms are public or private lobbies holding up to 12 players. Learn how to create, join, list, and configure rooms via the REST API."
 ---
@@ -181,7 +181,7 @@ export interface RoomListing {
 
 Understanding the lifecycle helps when operating the self-hosted backend.
 
-1. **Creation** — `POST /api/rooms` writes the listing into Redis with a TTL of **twice the listing-stale time** (default `2 × 600 s = 1 200 s`). The room is immediately visible in the lobby.
+1. **Creation** — `POST /api/rooms` writes the listing into Redis with a TTL of **twice the listing-stale threshold** (default `2 × 600 000 ms = 1 200 s = 20 min`). The room is immediately visible in the lobby.
 
 2. **Active** — every time the host sends a `listing` message (phase change, player count after a mesh event), the backend refreshes the Redis TTL and updates `updatedAt`. A listing whose `updatedAt` is older than `CC_LISTING_STALE_MS` (default **600 seconds**) is considered stale and omitted from `GET /api/rooms`.
 
@@ -202,6 +202,6 @@ Understanding the lifecycle helps when operating the self-hosted backend.
 Bots are opt-in and configured per room at the time the host starts the battle — they are not part of the `CreateRoomRequest`.
 
 - **Default**: `0` bots per room. Players fill seats first; bots only supplement when the host explicitly adds them at start time.
-- **Maximum**: `12` bots can be added on top of human players. In practice the total (players + bots) is still capped at 12 per the mesh ceiling, but the client constant `CC_ROOM_MAX_BOTS = 12` governs the UI cap.
+- **Maximum**: `12` bots can be added by the host (`CC_ROOM_MAX_BOTS = 12`). Bot brains run on the players' own devices — they are not separate network peers — so they do not count toward the 12-peer mesh ceiling.
 - **Distribution**: bot brains run on the players' own devices. The host spreads them as evenly as possible across all connected peers at start time — with 3 players and 4 bots that is roughly 2 / 1 / 1 bots per machine.
 - **Mid-battle**: if a human player leaves during a battle their tank is handed to a bot brain running on one of the remaining players' machines. This is automatic and does not require the original host to be alive (see [Host Migration](/multiplayer/host-migration)).

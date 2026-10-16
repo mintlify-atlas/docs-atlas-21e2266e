@@ -1,5 +1,5 @@
 ---
-title: "Battle Modes in SkillTanki Explained"
+title: "SkillTanki Battle Modes: Deathmatch, CTF, Assault, Explore"
 sidebarTitle: "Modes"
 description: "SkillTanki has five battle modes: Deathmatch, Team Deathmatch, Capture the Flag, Assault, and Explore. Learn the rules and objectives for each."
 ---
@@ -8,7 +8,7 @@ SkillTanki ships five distinct battle modes, covering solo play, team coordinati
 
 ## Choosing a mode
 
-When you create a room (or start a solo battle), you pick the mode before the match begins. The rooms list on the lobby screen can be filtered by mode using the `?mode=` query parameter: `?mode=dm`, `?mode=tdm`, `?mode=ctf`, `?mode=assault`, or `?mode=explore`.
+When you create a room (or start a solo battle), you pick the mode before the match begins. The rooms list on the lobby screen is filtered by the mode tab you have selected — the client requests only rooms of that mode from the server. Explore is not available as a multiplayer room mode; it is a local-only free drive with no lobby entry.
 
 ## Room settings
 
@@ -100,7 +100,7 @@ Rooms can also be **public** (visible in the lobby list) or **private** (passwor
 - Testing how a hull handles on specific terrain (suspension bounce, ramp launches, narrow passages).
 - Developers: verifying a new or modified map's navigation grid with `?debug=nav` in the URL.
 
-**Bots in Explore:** No bots are spawned; it would not make sense without combat. You can drive alone or invite others into a private Explore room.
+**Bots in Explore:** No bots are spawned; it would not make sense without combat. Explore is local-only — it cannot be shared as a multiplayer room. Drive alone to learn the map at your own pace.
 
 **Best for:** New players learning the map pool, or anyone who wants a stress-free session.
 </Accordion>

@@ -1,5 +1,5 @@
 ---
-title: "AI Bots in SkillTanki: Difficulty and Behavior"
+title: "SkillTanki AI Bots: Difficulty Levels and Behavior"
 sidebarTitle: "Overview"
 description: "SkillTanki bots play every game mode offline or fill empty multiplayer slots. Three difficulty levels tune reaction time, aim error, and aggression."
 ---
@@ -12,19 +12,22 @@ When you start a solo battle you choose how many bots join, up to **11** (`CC_MA
 
 ## Difficulty levels
 
-Three difficulty tiers — **Easy**, **Normal**, and **Hard** — are calibrated by kill-death ratio against a human player. Each tier shifts a cluster of aiming and aggression parameters, and each individual bot then gets a ±20 % random noise pass seeded per battle so no two bots at the same difficulty play identically.
+Three difficulty tiers — **Easy**, **Normal**, and **Hard** — are calibrated by kill-death ratio against a human player. Each tier sets the centre of a cluster of persona traits; each individual bot then gets a ±20 % random noise pass seeded per battle so no two bots at the same difficulty play identically.
+
+The table below shows the base values from `BotPersona.ts` that shape each bot's decision-making. Aiming sharpness (reaction delay, aim spread, target lag) is controlled separately by `GunnerService` profiles and is not listed here.
 
 | Trait | Easy | Normal | Hard |
 |---|---|---|---|
-| Reaction delay (first shot) | ~550 ms | ~300 ms | ~160 ms |
-| Aim error multiplier | 1.6 × | 1.15 × | 0.75 × |
 | Aggression | 0.5 | 0.6 | 0.7 |
 | Caution (retreat threshold) | 0.8 | 0.5 | 0.3 |
 | Teamwork | 0.3 | 0.6 | 0.9 |
+| Patience | 0.3 | 0.5 | 0.7 |
 | Accuracy base | 0.7 | 1.0 | 1.35 |
 | Mobility (shoots on the move) | 0 | 0.3 | 0.8 |
 
-**Reaction delay** is how long a bot waits before firing at a newly acquired target. An easy bot hesitates half a second; a hard bot fires in under 200 ms. **Aim error** is a wandering offset applied to the turret's point of aim; it grows against a moving target and decays when the target is stationary. **Turret traverse speed** limits how fast the turret can slew to track a new heading — a fast-strafing player can walk out of the cone before a lower-difficulty bot adjusts. **Target lag** is the additional positional delay baked into the predicted aim point, simulating the human tendency to follow a target slightly behind its actual position.
+**Caution** sets the health fraction at which a bot retreats and uses a repair kit — 0.8 on Easy means retreating at 80 % health; 0.3 on Hard means fighting to the wire. **Teamwork** controls how long an attacker waits at a staging point for a buddy before going it alone. **Patience** governs willingness to hold an ambush position at a chokepoint. **Mobility** ≥ 0.5 enables jinking — a sideways shuffle at hold distance while firing.
+
+**Aiming** is handled by `GunnerService`. Each difficulty maps to a profile with a reaction delay before the first shot (Easy: 750 ms, Normal: 360 ms, Hard: 80 ms), a wandering aim spread that grows against a fast-moving target, and a target-lag offset that simulates following slightly behind the actual position (Easy: 450 ms lag, Normal: 300 ms, Hard: 60 ms).
 
 On top of the difficulty baseline, each bot receives a **persona kind** — `rusher`, `balanced`, or `sniper` — sampled by seeded RNG at battle start. Rushers add 0.25 to aggression, subtract from caution and patience, and move more. Snipers add to patience and accuracy, subtract from aggression and mobility, and prefer elevated vantage points. See [AI & Navigation](/bots/ai-and-navigation) for the full persona model.
 
@@ -76,13 +79,13 @@ The bot engine includes a headless benchmark mode that runs a full battle with n
 http://localhost:5173/?bench=ctf&map=island_old_summer&bots=6&seconds=180&seed=1
 ```
 
-The report (`window.__bench`, also printed by `scripts/bench.mjs`) includes:
+The report (`globalThis.__bench`, also printed by `scripts/bench.mjs`) includes:
 
 | Field | Meaning |
 |---|---|
 | `drownings` | Tanks that fell off the map — target is **0** on Island |
-| `captures` | Total flag captures across both teams — target is **≥ 4** in 3 min |
-| `stuckEvents` | Recoveries that took longer than 10 s |
+| `capturesByTeam` | Flag captures per team — target is **≥ 4** total in 3 min |
+| `stuckEvents` | Recoveries that took longer than the stuck threshold |
 | `pathFailures` | A* requests that returned no path |
 | `avgTickMs` | Mean time per bot tick (budget: ≤ 0.3 ms per bot) |
 
