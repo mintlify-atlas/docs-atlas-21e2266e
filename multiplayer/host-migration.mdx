@@ -1,0 +1,132 @@
+---
+title: "Host Migration and Reconnect in SkillTanki"
+sidebarTitle: "Host Migration"
+description: "When the host disconnects, the next peer by join order becomes host automatically. Dropped players can rejoin the same tank within the rejoin TTL."
+---
+
+SkillTanki host migration is **seamless and automatic**: there is no election, no vote, and no pause. The host is always defined as the peer with the **lowest `joinSeq`** among all currently connected peers. The moment the current host's socket closes, the server promotes the next peer in `joinSeq` order and broadcasts the change. From the players' perspective the battle simply continues.
+
+---
+
+## Migration flow
+
+<Steps>
+  <Step title="Host disconnects or sends leave">
+    The host peer's WebSocket closes (network drop, page unload, or an explicit `leave` message). The server detects the disconnection during its `onClose` handler.
+  </Step>
+
+  <Step title="Server broadcasts hostChanged">
+    The server increments `hostEpoch`, selects the peer with the lowest `joinSeq` among the still-connected peers as the new host, and sends a `hostChanged` message to every remaining socket in the room:
+
+    ```typescript
+    export interface HostChangedMessage {
+      t: 'hostChanged';
+      hostId: string;    // peerId of the new host
+      hostEpoch: number; // incremented — old epoch messages are now stale
+    }
+    ```
+  </Step>
+
+  <Step title="New host takes over authority">
+    The newly promoted host begins driving the battle clock from the last broadcast value, adopts any bots that were running on the departed host's machine (redistributed evenly across the remaining players), and resumes sending authoritative damage, death, and score events over the mesh.
+  </Step>
+
+  <Step title="Peers discard stale authority messages">
+    Any authority message that arrives on the mesh carrying the old `hostEpoch` is silently dropped. This discards any in-flight messages from the former host that were sent before it knew it was being replaced.
+  </Step>
+</Steps>
+
+---
+
+## Reconnect and rejoin
+
+A page reload or a transient network drop does **not** permanently lose a player's seat. The server keeps the seat alive for `CC_REJOIN_TTL_MS` (default **120 seconds**) after the socket closes.
+
+During the gap, a bot brain running on one of the remaining players' machines drives the disconnected player's tank so the seat is never empty in the battle.
+
+### How rejoin works
+
+When a player connects to a room they receive a `welcome` message containing a short-lived `token`:
+
+```typescript
+export interface WelcomeMessage {
+  t: 'welcome';
+  peerId: string;
+  token: string;   // ← store this; send it back to reclaim the seat
+  // ...
+}
+```
+
+The client stores this token in `localStorage`. On reconnect, the client sends the token back inside its `join` message:
+
+```typescript
+export interface JoinMessage {
+  t: 'join';
+  name: string;
+  hull: string;
+  turret: string;
+  // ...
+  token?: string;  // ← present on a reconnect attempt
+}
+```
+
+If the token is still valid (within the TTL, seat not permanently freed), the server restores the player to their original seat with the same `peerId`. The server then broadcasts a `peerJoined` message with `rejoined: true` to all other peers:
+
+```typescript
+export interface PeerJoinedMessage {
+  t: 'peerJoined';
+  peer: PeerInfo;
+  rejoined: boolean;  // true → the peer's old WebRTC connections are gone; renegotiate
+}
+```
+
+The `rejoined: true` flag is important: the player's previous `RTCPeerConnection` objects are gone because the browser context was reloaded. Every other peer must create a fresh connection to the returned player — the mesh re-establishes itself automatically via new offer/answer exchanges through the signalling socket.
+
+If the token is rejected (expired or already freed), the server returns an `error` with code `bad_token`. The client then falls back to a fresh `join` without a token and takes a new seat.
+
+---
+
+## Rejoin TTL
+
+The seat reservation expires after `CC_REJOIN_TTL_MS` of inactivity (default **120 seconds**, configurable via the environment variable).
+
+| Parameter | Default | Environment variable |
+|-----------|---------|----------------------|
+| Rejoin window | 120 000 ms (2 min) | `CC_REJOIN_TTL_MS` |
+
+After the TTL the reserved seat is released. The bot that was driving the tank takes over permanently, and the slot is treated exactly like a bot seat for the rest of the battle. A new connection from the same player at this point takes a fresh seat (if one is available) and enters as a new peer with a new `peerId`.
+
+---
+
+## Permanent departure
+
+When a player leaves intentionally (sends a `leave` message) or when their rejoin window expires without a reconnection, the server broadcasts `peerLeft`:
+
+```typescript
+export interface PeerLeftMessage {
+  t: 'peerLeft';
+  peerId: string;
+}
+```
+
+On receiving `peerLeft`, the host assigns a bot brain to the empty seat. Bots are distributed evenly across the connected players' machines — the player with the fewest bots at that moment takes the new one.
+
+<Warning>
+  If the departing peer is the **last human player in the room** and the room becomes completely empty, the room is not kept alive indefinitely. It will be purged from Redis after **`CC_EMPTY_GRACE_MS`** (default **60 seconds**) with no reconnections. Any player who tries to rejoin after the room is purged will receive a `room_not_found` error and must create a new room.
+</Warning>
+
+---
+
+## Multi-process backend
+
+The self-hosted backend (`packages/backend`) is designed to run as **multiple Bun processes** — one per CPU core, or spread across machines — all sharing the same Redis instance. This means:
+
+- Any process can serve any player's WebSocket connection.
+- Host migration, `peerJoined`, and `peerLeft` messages must reach all peers in the room even when they are connected to different processes.
+
+This is handled transparently:
+
+- **Redis** stores the room listing and tracks which process currently holds each peer's socket (the *socket table*).
+- **Redis pub/sub** delivers messages cross-process: when process A needs to send a message to a peer whose socket lives on process B, it publishes to a per-room channel and process B forwards it to the peer.
+
+From a developer perspective there is nothing special to configure for this; it is automatic as long as all processes point at the same Redis instance (`CC_REDIS_HOST` / `CC_REDIS_PORT`). Run one process per port and put nginx in front with `config/nginx.conf` for load-balancing.

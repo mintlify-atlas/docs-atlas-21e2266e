@@ -1,0 +1,263 @@
+---
+title: "REST API: Room Endpoints"
+sidebarTitle: "Rooms API"
+description: "Create, list, and inspect SkillTanki rooms with four REST endpoints. Rooms are the lobby unit — up to 12 players, optional password, five battle modes."
+---
+
+## GET /api/rooms
+
+Return all rooms currently in the lobby index. Pass the optional `mode` query parameter to narrow results to a single battle mode.
+
+Rooms whose `phase` is `playing` and whose `playingSince + durationMs` is in the past are considered finished and will not appear once the backend purges them (controlled by `CC_LISTING_STALE_MS`, default 600 000 ms).
+
+### Query parameters
+
+<ParamField query="mode" type="string">
+  Filter rooms to one battle mode. Must be one of `dm`, `tdm`, `ctf`, or `assault`. Omit to return rooms of all modes.
+</ParamField>
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "rooms": [
+    {
+      "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "mode": "tdm",
+      "mapId": "map_warehouse",
+      "mapName": "Warehouse",
+      "host": "TankPilot",
+      "players": 3,
+      "maxPlayers": 12,
+      "phase": "open",
+      "locked": false,
+      "createdAt": 1718000000000,
+      "updatedAt": 1718000120000,
+      "playingSince": null,
+      "durationMs": 300000
+    }
+  ]
+}
+```
+
+<ResponseField name="status" type="string">Always `"ok"` on success.</ResponseField>
+<ResponseField name="rooms" type="RoomListing[]">Array of room listing objects. See the `RoomListing` fields below.</ResponseField>
+
+### RoomListing fields
+
+<ResponseField name="id" type="string">UUID v4 that uniquely identifies the room.</ResponseField>
+<ResponseField name="mode" type="string">Battle mode: `dm` (Deathmatch), `tdm` (Team Deathmatch), `ctf` (Capture the Flag), or `assault`.</ResponseField>
+<ResponseField name="mapId" type="string">Internal map identifier used by the game client to load assets.</ResponseField>
+<ResponseField name="mapName" type="string">Human-readable map name (max 60 characters), shown in the lobby UI.</ResponseField>
+<ResponseField name="host" type="string">Call sign of the room creator. This is a display label only — the host peer is identified by the lowest connected `joinSeq` on the signalling socket.</ResponseField>
+<ResponseField name="players" type="number">Current number of connected players.</ResponseField>
+<ResponseField name="maxPlayers" type="number">Player cap for the room (2–12).</ResponseField>
+<ResponseField name="phase" type="string">Room lifecycle phase: `open` (accepting players), `playing` (battle in progress), or `finished`.</ResponseField>
+<ResponseField name="locked" type="boolean">`true` when the room has a password set. The password itself is never returned.</ResponseField>
+<ResponseField name="createdAt" type="number">Unix timestamp (ms) when the room was created.</ResponseField>
+<ResponseField name="updatedAt" type="number">Unix timestamp (ms) of the last lobby listing update.</ResponseField>
+<ResponseField name="playingSince" type="number | null">Unix timestamp (ms) when the battle clock last started. Set by the host peer via a `listing` socket message; `null` while the room is still `open`.</ResponseField>
+<ResponseField name="durationMs" type="number | null">Battle length in milliseconds. `null` means the server default. A room with `phase: playing` where `playingSince + durationMs < Date.now()` is over from the lobby's perspective.</ResponseField>
+
+### Example
+
+```bash
+curl "https://example.com/api/rooms?mode=tdm"
+```
+
+---
+
+## POST /api/rooms
+
+Create a new room. The room is registered in the lobby index immediately, but the creator must also connect to `WS /ws/room/:id` and send a `join` message to actually occupy a seat.
+
+### Request body
+
+<ParamField body="mode" type="string" required>
+  Battle mode: `dm`, `tdm`, `ctf`, or `assault`.
+</ParamField>
+
+<ParamField body="mapId" type="string" required>
+  Internal map identifier (must match a map known to the game client).
+</ParamField>
+
+<ParamField body="mapName" type="string" required>
+  Human-readable map name shown in the lobby. Maximum 60 characters.
+</ParamField>
+
+<ParamField body="host" type="string" required>
+  Call sign of the creator shown in the lobby listing. Maximum 20 characters.
+</ParamField>
+
+<ParamField body="maxPlayers" type="number">
+  Player cap. Integer between `2` and `12`. Defaults to `12` for all modes.
+</ParamField>
+
+<ParamField body="durationMs" type="number">
+  Battle duration in milliseconds. Must be between `15000` (15 s) and `600000` (10 min). Omit to use the server default.
+</ParamField>
+
+<ParamField body="password" type="string">
+  Optional room password. Maximum 32 characters. When set, `locked: true` appears in listings and joining peers must provide the correct password in their `join` socket message.
+</ParamField>
+
+### Response — 201 Created
+
+```json
+{
+  "status": "ok",
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+}
+```
+
+<ResponseField name="status" type="string">Always `"ok"` on success.</ResponseField>
+<ResponseField name="id" type="string">The UUID of the newly created room. Use this to connect to `WS /ws/room/:id`.</ResponseField>
+
+### Example
+
+```bash
+curl -X POST "https://example.com/api/rooms" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mode": "ctf",
+    "mapId": "map_canyon",
+    "mapName": "Canyon",
+    "host": "TankPilot",
+    "maxPlayers": 6,
+    "durationMs": 300000,
+    "password": "secret"
+  }'
+```
+
+---
+
+## GET /api/rooms/:id
+
+Fetch a single room by its UUID. Returns `404` if the room does not exist or has been evicted from the index.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  The room UUID returned by `POST /api/rooms`.
+</ParamField>
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "room": {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "mode": "ctf",
+    "mapId": "map_canyon",
+    "mapName": "Canyon",
+    "host": "TankPilot",
+    "players": 2,
+    "maxPlayers": 6,
+    "phase": "open",
+    "locked": true,
+    "createdAt": 1718000000000,
+    "updatedAt": 1718000120000,
+    "playingSince": null,
+    "durationMs": 300000
+  }
+}
+```
+
+<ResponseField name="status" type="string">Always `"ok"` on success.</ResponseField>
+<ResponseField name="room" type="RoomListing">The room listing object. See [RoomListing fields](#roomlisting-fields) above.</ResponseField>
+
+### Errors
+
+| Code | HTTP | Meaning |
+|------|------|---------|
+| `room_not_found` | 404 | No room with this ID in the index |
+
+### Example
+
+```bash
+curl "https://example.com/api/rooms/3fa85f64-5717-4562-b3fc-2c963f66afa6"
+```
+
+---
+
+## POST /api/rooms/:id/republish
+
+Force the room to re-write its listing into the lobby index. This is used after maintenance migrations to ensure the stored record reflects the room's current state. Normal clients do not need to call this; the host peer calls it indirectly by sending a `listing` socket message.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  The room UUID.
+</ParamField>
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "room": {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "mode": "ctf",
+    "mapId": "map_canyon",
+    "mapName": "Canyon",
+    "host": "TankPilot",
+    "players": 2,
+    "maxPlayers": 6,
+    "phase": "open",
+    "locked": true,
+    "createdAt": 1718000000000,
+    "updatedAt": 1718001200000,
+    "playingSince": null,
+    "durationMs": 300000
+  }
+}
+```
+
+<ResponseField name="status" type="string">Always `"ok"` on success.</ResponseField>
+<ResponseField name="room" type="RoomListing">The freshly re-stamped room listing.</ResponseField>
+
+### Errors
+
+| Code | HTTP | Meaning |
+|------|------|---------|
+| `room_not_found` | 404 | No room with this ID in the index |
+
+### Example
+
+```bash
+curl -X POST "https://example.com/api/rooms/3fa85f64-5717-4562-b3fc-2c963f66afa6/republish"
+```
+
+---
+
+## GET /health_check
+
+Liveness probe for load balancers and orchestrators. Returns a `200` with a JSON body containing basic runtime diagnostics. No auth, no side effects.
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "service": "skilltanki-backend",
+  "now": 1718001234567,
+  "port": 30050,
+  "pid": 12345,
+  "uptime": 3600
+}
+```
+
+<ResponseField name="status" type="string">Always `"ok"` while the process is healthy.</ResponseField>
+<ResponseField name="service" type="string">Fixed string `"skilltanki-backend"`.</ResponseField>
+<ResponseField name="now" type="number">Current server time as a Unix timestamp (ms).</ResponseField>
+<ResponseField name="port" type="number">Port the backend is listening on (from `CC_WWWROOT_PORT`, default `30050`).</ResponseField>
+<ResponseField name="pid" type="number">OS process ID.</ResponseField>
+<ResponseField name="uptime" type="number">Process uptime in seconds, rounded to the nearest integer.</ResponseField>
+
+### Example
+
+```bash
+curl "https://example.com/health_check"
+```

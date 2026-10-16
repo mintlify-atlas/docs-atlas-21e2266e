@@ -1,0 +1,239 @@
+---
+title: "SkillTanki Asset Pipeline: Maps, Tanks, and Textures"
+sidebarTitle: "Asset Pipeline"
+description: "Game assets (~180 MB) live in assets/ under git-lfs and are served at /assets/*. Upload to R2 or MinIO with npm run upload-assets before the first run."
+---
+
+Game assets — maps, hulls, turrets, paint textures, sounds, skyboxes, and UI sprites — are stored in `assets/` at the repo root under git-lfs. They are **never bundled into the PWA shell**. Instead, both backends (Cloudflare Worker and self-hosted Bun) serve the entire `assets/` tree at `/assets/*`, and the client fetches individual files on demand. The service worker caches everything that has been loaded so that subsequent battles over the same map and tank loadout need no network round-trips.
+
+The total asset tree is approximately **180 MB across ~1,330 files**. On a first install you must upload these to your storage backend before the game can run.
+
+## Asset Manifests
+
+The `assets/` directory is self-describing through a set of JSON manifests:
+
+| File | Contents |
+|---|---|
+| `assets/assets.json` | Master manifest: every file path with its byte size, plus named asset groups (`boot`, `effects`, `sounds`, `map:<id>`) that the client uses to batch-prefetch assets for a given battle. |
+| `assets/hulls.json` | The 7 playable hull definitions. |
+| `assets/turrets.json` | The 9 turret definitions. |
+| `assets/paints.json` | Paint/skin definitions (image + preview thumbnail per paint). |
+| `assets/maps.json` | All playable maps with display name, theme, skybox, visual parameters, and a `supportsCtf` flag. |
+
+### Hull manifest (`assets/hulls.json`)
+
+Each hull has four modification tiers (M0–M3), each with a separate 3DS mesh, lightmap, and detail texture. The `thumbnail` is shown in the garage UI.
+
+```json
+{
+  "hulls": [
+    {
+      "id": "Hunter",
+      "mods": {
+        "M0": {
+          "mesh": "/hulls/hunter/m0/mesh.3ds",
+          "lightmap": "/hulls/hunter/m0/lightmap.jpg",
+          "details": "/hulls/hunter/m0/details.png"
+        },
+        "M1": {
+          "mesh": "/hulls/hunter/m1/mesh.3ds",
+          "lightmap": "/hulls/hunter/m1/lightmap.jpg",
+          "details": "/hulls/hunter/m1/details.png"
+        },
+        "M2": {
+          "mesh": "/hulls/hunter/m2/mesh.3ds",
+          "lightmap": "/hulls/hunter/m2/lightmap.jpg",
+          "details": "/hulls/hunter/m2/details.png"
+        },
+        "M3": {
+          "mesh": "/hulls/hunter/m3/mesh.3ds",
+          "lightmap": "/hulls/hunter/m3/lightmap.jpg",
+          "details": "/hulls/hunter/m3/details.png"
+        }
+      },
+      "thumbnail": "/hulls/hunter/preview.png"
+    }
+  ]
+}
+```
+
+The seven hull IDs are: `Wasp`, `Hornet`, `Hunter`, `Viking`, `Dictator`, `Titan`, `Mammoth`. Turrets follow the same structure with IDs: `Smoky`, `Twins`, `Firebird`, `Freeze`, `Isida`, `Ricochet`, `Thunder`, `Railgun`, `Shaft`.
+
+### Map manifest (`assets/maps.json`)
+
+Each map entry carries a human-readable `name`, a `theme` (`summer`), an optional `skybox` identifier, optional `visual` overrides (lighting colours, fog, dust particles), an asset `file` path pointing to the XML map data, a `thumbnail`, and a `supportsCtf` boolean.
+
+```json
+{
+  "defaultMap": "island_old_summer",
+  "maps": [
+    {
+      "id": "island_old_summer",
+      "name": "Island",
+      "theme": "summer",
+      "skybox": "skybox6",
+      "visual": {
+        "lightColor": "#c7bdab",
+        "shadowColor": "#54646f",
+        "fogColor": "#ddf1ff",
+        "fogAlpha": 0.25,
+        "nearLimit": 5000,
+        "farLimit": 10000,
+        "angleX": -1,
+        "angleZ": -0.5,
+        "dustParticle": "summer",
+        "dustDensity": 0.15,
+        "dustSize": 200,
+        "dustAlpha": 0.75,
+        "dustNearDistance": 5000,
+        "dustFarDistance": 7000
+      },
+      "file": "/maps/summer/island_old_summer.xml",
+      "thumbnail": "/thumbnails/maps/island_old_summer.jpg",
+      "supportsCtf": true
+    }
+  ]
+}
+```
+
+### Asset groups in `assets/assets.json`
+
+In addition to the flat `files` map (path → byte size), `assets.json` defines `groups`. The client reads these groups to know which files to prefetch for a given context:
+
+- **`boot`** — ~620 KB of UI sprites and embedded bitmaps fetched immediately on load.
+- **`effects`** — ~10 MB of weapon particle sheets and death animations loaded before the first battle.
+- **`sounds`** — ~1.2 MB of engine, weapon, and CTF event audio.
+- **`map:<id>`** — per-map groups listing every prop mesh, texture, and the map XML itself. The client fetches the group for the selected map during the loading screen.
+
+## git-lfs
+
+The binary assets (`.3ds` mesh files, `.jpg`/`.png` textures, `.mp3`/`.wav` audio) are tracked under git-lfs. A fresh clone without `git lfs pull` will have 130-byte pointer files instead of real content. The upload scripts detect LFS pointers and abort with an error message before attempting to upload them.
+
+Always run `git lfs pull` before uploading assets:
+
+```bash
+git lfs pull
+```
+
+## Uploading to R2 (Cloudflare)
+
+<Steps>
+  <Step title="Fetch the binaries from git-lfs">
+    ```bash
+    git lfs pull
+    ```
+    This replaces the pointer stubs in `assets/` with the real binary content. Required before every first-time upload or after pulling a commit that added new assets.
+  </Step>
+
+  <Step title="Set R2 credentials">
+    The S3-compatible R2 API requires three environment variables. Create an API token in the Cloudflare dashboard with **Object Read & Write** on the target bucket:
+
+    ```bash
+    export R2_ACCOUNT_ID=<your-account-id>
+    export R2_ACCESS_KEY_ID=<your-access-key-id>
+    export R2_SECRET_ACCESS_KEY=<your-secret-access-key>
+    # Optional: override the default bucket name
+    export R2_BUCKET=skilltanki-mobile-assets
+    ```
+  </Step>
+
+  <Step title="Upload to the production R2 bucket">
+    ```bash
+    npm run upload-assets
+    ```
+
+    Runs `scripts/upload-assets.mjs`. The script lists the bucket first and computes an MD5 for each local file; objects whose size and ETag already match are skipped. Only new or changed files are uploaded. A re-run after a crash safely resumes from where it left off.
+
+    The uploader runs 8 concurrent PUT requests. Estimated time for a full upload from scratch is a few minutes depending on connection speed.
+  </Step>
+
+  <Step title="Seed the local wrangler dev bucket (first-time local setup)">
+    ```bash
+    npm run upload-assets -- --local
+    ```
+
+    Uploads through the running `dev:server` worker's `PUT /__dev/assets/*` route into workerd's local R2 emulation instead of the real bucket. The dev worker must already be running (`npm run dev:server`). No S3 credentials are required.
+
+    You can also target a non-default local worker port:
+
+    ```bash
+    npm run upload-assets -- --local --url http://127.0.0.1:8790
+    ```
+  </Step>
+</Steps>
+
+### Additional upload flags
+
+| Flag | Effect |
+|---|---|
+| `--dry-run` | List what would change, without credentials or uploads |
+| `--wrangler` | Use the wrangler CLI login instead of S3 keys (slower — one CLI call per file; uses a local `.r2-upload/<bucket>.json` manifest to skip unchanged files) |
+| `--limit=<n>` | Upload only the first `n` files (useful for testing) |
+
+## Uploading to MinIO (Self-hosted)
+
+<Steps>
+  <Step title="Start the backend services (Redis, MongoDB, MinIO)">
+    ```bash
+    npm run services -w skilltanki-backend
+    ```
+
+    Runs `docker compose up` inside `packages/backend`, starting Redis, MongoDB, and MinIO. MinIO is exposed on port `9000` with default credentials (`minioadmin` / `minioadmin`). The MinIO console is available at `http://localhost:9001`.
+  </Step>
+
+  <Step title="Upload assets to the MinIO bucket">
+    ```bash
+    npm run upload-assets -w skilltanki-backend
+    ```
+
+    Runs `packages/backend/scripts/upload-assets.mjs` using the MinIO Node.js client (`minio` npm package) directly — not through the HTTP API route. The script is idempotent: it lists the bucket first and compares MD5 ETags, skipping files that are already current.
+
+    MinIO connection is configured through environment variables with these defaults:
+
+    | Variable | Default |
+    |---|---|
+    | `CC_MINIO_ENDPOINT` | `127.0.0.1` |
+    | `CC_MINIO_PORT` | `9000` |
+    | `CC_MINIO_USE_SSL` | `0` |
+    | `CC_MINIO_ACCESSKEY` | `minioadmin` |
+    | `CC_MINIO_SECRETKEY` | `minioadmin` |
+    | `CC_MINIO_BUCKET` | `skilltanki-mobile-assets` |
+
+    Override any of these in a `.env` file in `packages/backend/` or via the shell environment before running the command.
+  </Step>
+</Steps>
+
+## Asset Cache Version
+
+The service worker caches assets under keys that include a version number. Because asset paths are not content-hashed (they stay stable across updates), a changed file under the same path would otherwise be served stale from the cache for up to a month.
+
+The cache version is set in `apps/mobile/src/config/params.ts`:
+
+```ts
+/**
+ * Bump to retire every cached asset on the next launch: the /assets/ keys
+ * are not content-hashed, so a changed file under the same key would
+ * otherwise stay stale in the service worker cache for a month.
+ */
+export const CC_ASSET_CACHE_VERSION = 1;
+```
+
+**When to bump:** any time you change binary asset content in a way that must reach players promptly — for example, after replacing a texture, updating a mesh, or fixing a sound. Incrementing this constant causes the service worker to treat all previously cached asset responses as stale and re-fetch them on next access.
+
+Rebuild and redeploy the PWA shell after bumping: `npm run deploy`.
+
+## Dev Asset Route
+
+When the Cloudflare backend is started locally via `npm run dev:server` (or `npm run start:build`), the environment variable `CC_DEV_SEED=1` is set by `apps/server/wrangler.jsonc`. This activates a special HTTP route:
+
+```
+PUT /__dev/assets/*
+```
+
+This route accepts binary file uploads and writes them directly into workerd's local R2 bucket, bypassing the normal read-only asset path. It is used exclusively by `npm run upload-assets -- --local` to seed the local bucket in parallel (8 concurrent connections) rather than issuing one-at-a-time wrangler CLI calls.
+
+<Warning>
+  **Never enable `CC_DEV_SEED=1` in production.** The route accepts arbitrary writes to the asset bucket with no authentication. It is present only in `wrangler.jsonc` under the `[dev]` vars section and is never set in the production `wrangler.jsonc` configuration.
+</Warning>
+
+The route returns `404` immediately if `CC_DEV_SEED !== '1'`, so even if the variable is accidentally unset in dev the seeder will fail loudly rather than silently.

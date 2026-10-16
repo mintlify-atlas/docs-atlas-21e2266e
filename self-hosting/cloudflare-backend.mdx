@@ -1,0 +1,176 @@
+---
+title: "Deploy SkillTanki on Cloudflare Workers"
+sidebarTitle: "Cloudflare"
+description: "Deploy SkillTanki as a Cloudflare Worker with Durable Objects, KV, R2, and Workers Static Assets. One origin, zero servers, global edge."
+---
+
+`apps/server` is the Cloudflare Worker backend for SkillTanki. It serves the lobby REST API, WebRTC signalling, game assets from R2, and the PWA shell — all from one origin — with no VPS to maintain. The mobile client speaks the same protocol to this backend as it does to the self-hosted Bun backend, so you can swap between them at any time.
+
+## Architecture
+
+The Worker is built on four Cloudflare primitives:
+
+| Primitive | Role |
+|-----------|------|
+| **Durable Objects** | One `RoomObject` per room (SQLite storage, strongly consistent); one `LobbyObject` for the global lobby index |
+| **KV** | `CACHE` namespace — stores minted TURN credentials so they are not re-minted on every ICE request |
+| **R2** | `skilltanki-mobile-assets` bucket — holds ~180 MB of game data (maps, tanks, textures, sounds) uploaded once and served at `/assets/*` |
+| **Workers Static Assets** | The compiled PWA shell (`build/public`), served at the edge; the Worker intercepts the paths it owns before the static tree gets a chance |
+
+The `run_worker_first` list (`/api/*`, `/ws/*`, `/assets/*`, `/health_check`) ensures that API routes and WebSocket upgrades always hit the Worker rather than the static asset handler, while every other request (`/`, hashed JS chunks, the service worker) is served directly from the edge cache.
+
+## First deploy
+
+<Steps>
+  <Step title="Set up Cloudflare and log in">
+    Create a free [Cloudflare account](https://dash.cloudflare.com/sign-up) if you do not have one, then authenticate wrangler:
+
+    ```bash
+    npx wrangler login
+    ```
+  </Step>
+  <Step title="Update account_id in wrangler.jsonc">
+    Open `wrangler.jsonc` at the repo root and replace the existing `account_id` with your own. You can find your account ID on the Cloudflare dashboard sidebar under **Workers & Pages**.
+
+    ```jsonc
+    "account_id": "<your-account-id>",
+    ```
+  </Step>
+  <Step title="Pull game assets from Git LFS">
+    The ~180 MB asset tree is stored in Git LFS. Pull it before uploading:
+
+    ```bash
+    git lfs pull
+    ```
+  </Step>
+  <Step title="Upload assets to R2">
+    Run the asset uploader once. It computes an MD5 for every file and skips anything already in the bucket, so subsequent runs are fast:
+
+    ```bash
+    npm run upload-assets
+    ```
+
+    This pushes the contents of `assets/` into the `skilltanki-mobile-assets` R2 bucket declared in `wrangler.jsonc`.
+  </Step>
+  <Step title="Deploy the Worker">
+    Build the PWA shell and deploy the Worker in one command:
+
+    ```bash
+    npm run deploy
+    ```
+
+    This runs `npm run build` (which compiles `apps/mobile` into `build/public`) and then `wrangler deploy`. Wrangler bundles `apps/server/src/index.ts`, uploads the static assets from `build/public`, and wires up all the bindings declared in `wrangler.jsonc`.
+
+    Your Worker is now live at `https://mobile.<your-subdomain>.workers.dev/`.
+  </Step>
+</Steps>
+
+## Local development
+
+<Steps>
+  <Step title="Start the local Worker">
+    Wrangler dev runs on port 8787 with a local R2 bucket backed by your filesystem:
+
+    ```bash
+    npm run dev:server
+    ```
+  </Step>
+  <Step title="Seed the local R2 bucket">
+    Upload assets into the local bucket once (the `--local` flag targets the wrangler dev instance rather than the production bucket):
+
+    ```bash
+    npm run upload-assets -- --local
+    ```
+  </Step>
+  <Step title="Start the game client">
+    Run the Vite dev server. It proxies `/api`, `/ws`, and `/assets` to the Worker on port 8787:
+
+    ```bash
+    npm run dev:mobile
+    ```
+
+    Open [http://localhost:5173](http://localhost:5173) in your browser.
+  </Step>
+</Steps>
+
+## Wrangler config highlights
+
+The full config lives in `wrangler.jsonc` at the repo root. The key fields are:
+
+```jsonc
+{
+  "name": "mobile",                         // workers.dev subdomain: mobile.<account>.workers.dev
+  "main": "apps/server/src/index.ts",       // Worker entry point
+  "compatibility_date": "2026-10-01",
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOM",        "class_name": "RoomObject"  },  // one per room
+      { "name": "LOBBY_INDEX", "class_name": "LobbyObject" }   // one for the global lobby
+    ]
+  },
+
+  // SQLite is locked in at v1; classes are added but never changed.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RoomObject"]  },
+    { "tag": "v2", "new_sqlite_classes": ["LobbyObject"] }
+  ],
+
+  "kv_namespaces": [
+    { "binding": "CACHE", "id": "<your-kv-id>" }  // TURN credential cache
+  ],
+
+  "r2_buckets": [
+    { "binding": "ASSETS", "bucket_name": "skilltanki-mobile-assets" }
+  ],
+
+  "assets": {
+    "directory": "build/public",
+    "binding": "SITE",
+    // Worker intercepts these paths; everything else is served from the static tree.
+    "run_worker_first": ["/api/*", "/ws/*", "/assets/*", "/health_check"]
+  },
+
+  "vars": {
+    "CC_EMPTY_GRACE_MS":    "60000",   // purge a room that has been empty this long
+    "CC_REJOIN_TTL_MS":     "120000",  // how long a dropped peer keeps its seat
+    "CC_LISTING_STALE_MS":  "600000"   // drop a listing that has not been updated
+  }
+}
+```
+
+All three `CC_*` vars in `vars` accept the same values as the self-hosted backend. See [Configuration](/self-hosting/configuration) for the full reference.
+
+## TURN relay
+
+Out of the box the Worker mints short-lived TURN credentials from the project's own Cloudflare Realtime key, baked into `apps/server/src/config/params.ts`. This means WebRTC relay works for a fresh deployment with no setup.
+
+You have two override paths:
+
+**Use your own Cloudflare Realtime key:**
+1. Add `"CC_CF_TURN_KEY_ID": "<your-key-id>"` to the `vars` block in `wrangler.jsonc`.
+2. Store the API token as a secret (never in `vars`):
+   ```bash
+   wrangler secret put CC_CF_TURN_API_TOKEN
+   ```
+
+**Use a different TURN relay entirely:**
+1. Add `"CC_ICE_TURN_URL": "turn:relay.example.com:3478"` (comma-separated for multiple) and `"CC_ICE_TURN_USERNAME"` to `vars`.
+2. Store the credential as a secret:
+   ```bash
+   wrangler secret put CC_ICE_TURN_CREDENTIAL
+   ```
+
+Setting `CC_CF_TURN_KEY_ID` to `none` disables the Cloudflare relay without enabling another one.
+
+## Migrations
+
+The `migrate/` directory at the repo root contains one-off scripts that operate against the live Worker (they talk directly to the Durable Objects via the Worker's API). Run them manually after deploying a new schema version — they are not run automatically by `wrangler deploy`.
+
+For example, the v2 migration that moved room listings from KV into the `LobbyObject` Durable Object is in:
+
+```
+migrate/2026-10-15-lobby-index-kv-to-do.mjs
+```
+
+Always deploy the Worker first (so the new Durable Object class is registered), then run the migration script.

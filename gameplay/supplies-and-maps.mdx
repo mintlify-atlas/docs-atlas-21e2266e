@@ -1,0 +1,67 @@
+---
+title: "Supplies and Maps in SkillTanki"
+sidebarTitle: "Supplies & Maps"
+description: "Five free supplies with shared cooldowns give every player equal power boosts. 91 maps with summer and winter variants are all available from the start."
+---
+
+## Supplies
+
+SkillTanki has **no shop, no currency, and no pay-to-win**. Every supply is free to every player in every battle, limited only by a cooldown timer that is identical for everyone. There is no way to buy extra charges, reduce someone else's cooldown, or stockpile supplies between matches. The playing field is level from the first second.
+
+Five supplies are available in every battle. Activate them with keyboard keys **1–5**, the supply bar on the touch HUD, or the D-pad on a gamepad (see [Controls](/gameplay/controls) for the full binding reference).
+
+| Supply | Effect | Key | Duration | Cooldown |
+|--------|--------|-----|----------|----------|
+| **Repair Kit** | Heals your tank over time (300 HP per tick, every 500 ms). The healing is **interrupted** the moment you take a hit, so activate it in cover, not under fire. In practice the first tick tops most hulls to full. | `1` | 3 s | 15 s |
+| **Double Armour** | Halves all incoming damage (`incomingDamageMultiplier = 0.5`) for the duration. Does not prevent the Repair Kit from being interrupted. | `2` | 15 s | 30 s |
+| **Double Damage** | Multiplies your outgoing damage by **×1.5** for the duration. The multiplier is intentionally below ×2 so that a Railgun boosted by Double Damage still cannot one-shot a medium hull (Hunter has 130 HP; Railgun at ×1.5 lands 127.5). Balance preserved, no skill removed. | `3` | 15 s | 30 s |
+| **Nitro** | Immediately raises your tank's top speed and acceleration by the hull's Nitro factors (defined in `HullSpecs`). The boost is applied instantly — no ramp-up — and removed at the end of the duration with a smooth fade. | `4` | 15 s | 30 s |
+| **Nuclear Energy** | Area-of-effect damage burst to all enemies in range, **plus** an instant weapon energy top-up (full gauge on Firebird/Freeze/Isida/Shaft; cleared reload on Smoky/Twins/Ricochet/Thunder/Railgun). Also speeds up energy regeneration and reload recovery by **45%** for the duration — worth using on any turret, not just the stream weapons. | `5` | 15 s | 60 s |
+
+<Warning>
+  The Repair Kit is cancelled immediately if your tank is hit while it is active. Activate it from behind cover or right after destroying the last nearby threat. Combining it with Double Armour first lets you tank a hit or two and still complete the heal.
+</Warning>
+
+<Note>
+  Cooldowns are per-player and run independently. A teammate using their Double Armour does not affect your cooldown. Everyone has the same timers; coordination is about *timing*, not resources.
+</Note>
+
+### Supply strategy by mode
+
+- **Deathmatch:** Nitro opens gaps to chase or escape; Nuclear Energy clears a cluster of bots; Repair Kit is your safety net between engagements.
+- **Team Deathmatch:** Use Double Armour when you are the designated front-liner drawing fire. The Isida turret pairs with Repair Kit for near-unlimited sustain in the right hull.
+- **CTF / Assault (flag running):** Nitro is essential for a flag carrier — the speed advantage can be the difference between a capture and a takedown. Teammates should save Nuclear Energy to blast interceptors off the flag route.
+
+---
+
+## Maps
+
+SkillTanki ships **91 maps** — all open and playable from day one, no progression unlock required. The map pool covers:
+
+- **Summer and winter variants** of the same layouts — a hangar in July looks and feels different under a December skybox, but the geometry is identical, so map knowledge transfers.
+- **Classic archetypes** — hangars, garages, sand arenas, beaches, city blocks with ramps, elevated deck platforms, space stations, hillside terrains, and island battlefields.
+- The **default map** is `island_old_summer`, a mid-size open island with mixed terrain — good for learning most hull types.
+
+Maps are **not bundled into the PWA shell**. They are served from `/assets/*` on the backend (Cloudflare Worker or self-hosted Bun server) and cached by the service worker on first use. This keeps the installable app size small while letting the map pool grow without a client update.
+
+<Info>
+  Developers: the full map tree lives in the repo's `assets/` directory (tracked via git-lfs). Run `git lfs pull` before seeding the local asset server. Maps are uploaded once with `npm run upload-assets` (or `npm run upload-assets -w skilltanki-backend` for the self-hosted path).
+</Info>
+
+### Choosing a map
+
+In the **New Room** or **Solo Battle** form, a scrollable grid shows all maps as thumbnails. Tapping a thumbnail previews the full name. Both summer and winter variants of a layout appear as separate entries. There is no hidden or premium section — scroll to the end to confirm you have seen them all.
+
+---
+
+## Spawn protection and balance
+
+SkillTanki's balance philosophy is skill over spending. Several systems enforce this:
+
+| System | What it does |
+|--------|-------------|
+| **Spawn protection** | A freshly spawned tank is briefly invulnerable, preventing spawn-camping. |
+| **Free spawn point selection** | You are not forced into a fixed spawn. The game presents available spawn points and lets you pick, so you never respawn directly in front of an enemy. |
+| **Damage spread and falloff** | All weapons have tuned accuracy spread and range falloff. No weapon is a hitscan sniper at unlimited range except the Railgun, which is balanced by a slower reload. |
+| **Capped supply multipliers** | Double Damage is ×1.5, not ×2. This single cap prevents any supply combination from producing a guaranteed one-shot kill on a medium or heavy hull. |
+| **Equal cooldowns** | Every player has the same supply timers. There is no way to shorten yours or lengthen an opponent's. |

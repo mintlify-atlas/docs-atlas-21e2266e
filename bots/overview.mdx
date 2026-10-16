@@ -1,0 +1,89 @@
+---
+title: "AI Bots in SkillTanki: Difficulty and Behavior"
+sidebarTitle: "Overview"
+description: "SkillTanki bots play every game mode offline or fill empty multiplayer slots. Three difficulty levels tune reaction time, aim error, and aggression."
+---
+
+SkillTanki bots are not turrets on rails. Every game mode — Deathmatch, Team Deathmatch, Capture the Flag, Assault, and Explore — runs fully offline with bots filling every slot. The same bot engine that powers offline battles also fills seats vacated by disconnecting players in multiplayer, so you always have a full field.
+
+When you start a solo battle you choose how many bots join, up to **11** (`CC_MAX_BOTS = 11`). The default is **5** (`CC_DEFAULT_BOTS = 5`) — enough for a lively free-for-all without the map feeling crowded.
+
+---
+
+## Difficulty levels
+
+Three difficulty tiers — **Easy**, **Normal**, and **Hard** — are calibrated by kill-death ratio against a human player. Each tier shifts a cluster of aiming and aggression parameters, and each individual bot then gets a ±20 % random noise pass seeded per battle so no two bots at the same difficulty play identically.
+
+| Trait | Easy | Normal | Hard |
+|---|---|---|---|
+| Reaction delay (first shot) | ~550 ms | ~300 ms | ~160 ms |
+| Aim error multiplier | 1.6 × | 1.15 × | 0.75 × |
+| Aggression | 0.5 | 0.6 | 0.7 |
+| Caution (retreat threshold) | 0.8 | 0.5 | 0.3 |
+| Teamwork | 0.3 | 0.6 | 0.9 |
+| Accuracy base | 0.7 | 1.0 | 1.35 |
+| Mobility (shoots on the move) | 0 | 0.3 | 0.8 |
+
+**Reaction delay** is how long a bot waits before firing at a newly acquired target. An easy bot hesitates half a second; a hard bot fires in under 200 ms. **Aim error** is a wandering offset applied to the turret's point of aim; it grows against a moving target and decays when the target is stationary. **Turret traverse speed** limits how fast the turret can slew to track a new heading — a fast-strafing player can walk out of the cone before a lower-difficulty bot adjusts. **Target lag** is the additional positional delay baked into the predicted aim point, simulating the human tendency to follow a target slightly behind its actual position.
+
+On top of the difficulty baseline, each bot receives a **persona kind** — `rusher`, `balanced`, or `sniper` — sampled by seeded RNG at battle start. Rushers add 0.25 to aggression, subtract from caution and patience, and move more. Snipers add to patience and accuracy, subtract from aggression and mobility, and prefer elevated vantage points. See [AI & Navigation](/bots/ai-and-navigation) for the full persona model.
+
+---
+
+## Weapon awareness
+
+Bots know the weapon they are carrying and fire it correctly:
+
+- **Hitscan weapons** (Smoky, Railgun, Twins, Ricochet) — fired directly on the predicted target position with appropriate lead for projectile travel time.
+- **Shaft** — tapped at close range for rapid chip damage; charged for the high-damage aimed shot when the target is at hold distance. The laser is visible to the target during charge.
+- **Isida** — in team modes, the bot prioritises healing a wounded teammate over draining an enemy. It evaluates ally health every tick and switches beam mode automatically.
+- **Jet weapons** (Firebird, Freeze) — the bot holds the trigger while the target remains inside the weapon's cone, rather than pulsing it, to maintain continuous effect.
+- **Thunder** — the bot leads the splash so the blast radius catches fast-moving targets.
+
+---
+
+## Supply usage
+
+Supplies are free and unlimited (shared cooldown), and bots spend them with intent rather than at random:
+
+| Supply | When a bot uses it |
+|---|---|
+| **Nitro** | To close the gap while chasing or to pull ahead as a flag carrier escaping pursuit |
+| **Double Armour** | When incoming fire is detected and health is dropping — a defensive reaction under fire |
+| **Repair Kit** | When health falls below the bot's caution threshold and no armour is active |
+| **Nuclear Energy** | When several enemies are clustered together, or during a co-ordinated assault push |
+| **Double Damage** | When locked onto a target with a clear line of sight — maximises the window of advantage |
+
+The supply service inherits the persona's caution and aggression values so aggressive bots pop nitro more readily and cautious bots save the repair kit for lower health fractions.
+
+---
+
+## In multiplayer
+
+Room bots are **opt-in and off by default** (`CC_DEFAULT_ROOM_BOTS = 0`). The host sets the count when creating the room, up to `CC_ROOM_MAX_BOTS = 12` seats on top of the human players. Bots are distributed across all connected players' machines — each device runs one brain per assigned bot, with at most roughly two bots per phone in a full twelve-player room.
+
+When a **player leaves mid-battle**, their tank does not vanish. The host's bot engine takes over the vacated seat immediately, so the battle continues at full strength. If the host itself leaves, the next player becomes host, the clock carries on from the last authoritative value, and all orphaned bot assignments migrate with it.
+
+If a **player drops and reconnects**, a bot drives their tank in the gap. On rejoin the bot releases the controls and the player resumes as if they had never left.
+
+---
+
+## Bench testing
+
+The bot engine includes a headless benchmark mode that runs a full battle with no human player and emits a machine-readable JSON report. Open this URL while the dev server is running:
+
+```
+http://localhost:5173/?bench=ctf&map=island_old_summer&bots=6&seconds=180&seed=1
+```
+
+The report (`window.__bench`, also printed by `scripts/bench.mjs`) includes:
+
+| Field | Meaning |
+|---|---|
+| `drownings` | Tanks that fell off the map — target is **0** on Island |
+| `captures` | Total flag captures across both teams — target is **≥ 4** in 3 min |
+| `stuckEvents` | Recoveries that took longer than 10 s |
+| `pathFailures` | A* requests that returned no path |
+| `avgTickMs` | Mean time per bot tick (budget: ≤ 0.3 ms per bot) |
+
+You can swap `bench=ctf` for `bench=dm`, `bench=tdm`, or `bench=assault`, and any map ID for `map=`. The `seed` parameter makes bot personas and RNG deterministic so runs are reproducible.

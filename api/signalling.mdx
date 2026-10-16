@@ -1,0 +1,355 @@
+---
+title: "WebSocket Signalling Protocol Reference"
+sidebarTitle: "Signalling"
+description: "The /ws/room/:id WebSocket carries JSON messages for peer discovery and WebRTC negotiation. Full reference for all client-to-server and server-to-client message types."
+---
+
+## Overview
+
+The signalling socket is the only stateful connection a client holds to the backend. It serves two purposes:
+
+1. **Peer discovery** — when a peer joins, every other peer in the room receives a `peerJoined` message with their avatar details. When a peer leaves, the others receive `peerLeft`.
+2. **WebRTC relay** — peers exchange SDP offers/answers and ICE candidates through the server until their DataChannels are up. After that, all game traffic flows directly peer-to-peer.
+
+Connect to:
+
+```
+WS  /ws/room/:id
+WSS /ws/room/:id   (TLS in production)
+```
+
+The `:id` must be a UUID v4 (36-character hex with dashes). Connecting with a malformed ID returns `400`. Connecting without a WebSocket `Upgrade` header returns `426`.
+
+**All messages are JSON text frames.** Send a `join` message immediately after the connection opens — all other message types are rejected with `bad_request` until the join succeeds.
+
+Message processing is **strictly ordered** within a connection: each frame is handled to completion before the next begins, so a `signal` frame cannot overtake the `join` that precedes it in the send queue.
+
+---
+
+## Client → Server messages
+
+<AccordionGroup>
+  <Accordion title="join — Enter the room">
+
+Send this as the very **first** message after the socket opens. A second `join` on the same socket is rejected with `bad_request`.
+
+```typescript
+interface JoinMessage {
+  t: 'join';
+  name: string;
+  hull: string;
+  turret: string;
+  paint?: string;
+  team?: 'red' | 'blue';
+  password?: string;
+  token?: string;
+}
+```
+
+<ParamField body="t" type="string" required>
+  Must be `"join"`.
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Player call sign displayed to other peers. Maximum 20 characters.
+</ParamField>
+
+<ParamField body="hull" type="string" required>
+  Tank hull asset identifier (e.g. `"hull_hunter"`).
+</ParamField>
+
+<ParamField body="turret" type="string" required>
+  Turret asset identifier (e.g. `"turret_railgun"`).
+</ParamField>
+
+<ParamField body="paint" type="string">
+  Optional paint/skin identifier applied to the tank.
+</ParamField>
+
+<ParamField body="team" type="string">
+  Requested team: `"red"` or `"blue"`. Ignored for `dm` mode. The server balances team sizes — the actual assignment is returned in `welcome.me.team` and may differ from the requested value if one side would otherwise outnumber the other by more than one.
+</ParamField>
+
+<ParamField body="password" type="string">
+  Room password. Required if `locked: true` in the room listing. A wrong or missing password closes the socket with `4000` and sends an `error` frame with code `bad_password`.
+</ParamField>
+
+<ParamField body="token" type="string">
+  Reconnect token from a previous `welcome` message. When provided, the server resumes the same `peerId` and `joinSeq`, and broadcasts `peerJoined` with `rejoined: true` to all other peers so they renegotiate DataChannels. Tokens expire after `CC_REJOIN_TTL_MS` (default 120 000 ms).
+</ParamField>
+
+**On success:** the server replies with a `welcome` message.
+
+**On failure:** the server sends an `error` frame and immediately closes the socket with code `4000`.
+
+  </Accordion>
+
+  <Accordion title="signal — Forward a WebRTC signal to a peer">
+
+Relay an SDP offer, SDP answer, or ICE candidate to another peer in the room. The server passes the `payload` through untouched.
+
+```typescript
+interface SignalMessage {
+  t: 'signal';
+  to: string;
+  kind: 'offer' | 'answer' | 'ice';
+  payload: unknown;
+}
+```
+
+<ParamField body="t" type="string" required>
+  Must be `"signal"`.
+</ParamField>
+
+<ParamField body="to" type="string" required>
+  `peerId` of the recipient. Must be another peer currently in the same room.
+</ParamField>
+
+<ParamField body="kind" type="string" required>
+  Signal type: `"offer"` (`RTCSessionDescriptionInit`), `"answer"` (`RTCSessionDescriptionInit`), or `"ice"` (`RTCIceCandidateInit`).
+</ParamField>
+
+<ParamField body="payload" type="unknown" required>
+  The raw WebRTC descriptor object. Payloads whose serialised size exceeds **16 384 bytes** (16 KiB, `CC_MAX_SIGNAL_BYTES`) are silently dropped.
+</ParamField>
+
+The recipient receives a `RelayedSignalMessage` with a `from` field set to the sender's `peerId`.
+
+  </Accordion>
+
+  <Accordion title="listing — Update the lobby listing (host only)">
+
+Refresh the room's entry in the public lobby index. Only the current host peer may send this; non-host senders receive an `error` frame with code `not_host`.
+
+```typescript
+interface ListingMessage {
+  t: 'listing';
+  phase: 'open' | 'playing' | 'finished';
+}
+```
+
+<ParamField body="t" type="string" required>
+  Must be `"listing"`.
+</ParamField>
+
+<ParamField body="phase" type="string" required>
+  The new room phase to publish. Send `"playing"` when the battle starts (sets `playingSince` in the listing); send `"open"` or `"finished"` accordingly.
+</ParamField>
+
+The host calls this at game start, on the first kill (to re-stamp `playingSince`), and whenever the connected player count changes.
+
+  </Accordion>
+
+  <Accordion title="leave — Clean disconnect">
+
+Signal an intentional departure before closing the socket. This lets the server immediately broadcast `peerLeft` to remaining peers rather than waiting for the TCP timeout.
+
+```typescript
+interface LeaveMessage {
+  t: 'leave';
+}
+```
+
+<ParamField body="t" type="string" required>
+  Must be `"leave"`.
+</ParamField>
+
+After sending `leave`, close the WebSocket. The server will not respond with any message.
+
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Server → Client messages
+
+<AccordionGroup>
+  <Accordion title="welcome — Join confirmed">
+
+Sent exactly once, immediately after a successful `join`. Contains everything the peer needs to open connections to all existing room members.
+
+```typescript
+interface WelcomeMessage {
+  t: 'welcome';
+  peerId: string;
+  token: string;
+  me: PeerInfo;
+  hostId: string;
+  hostEpoch: number;
+  peers: PeerInfo[];
+  iceServers: IceServer[];
+  room: RoomConfig;
+}
+```
+
+<ResponseField name="t" type="string">Always `"welcome"`.</ResponseField>
+<ResponseField name="peerId" type="string">The UUID the server assigned to this peer. Use it as the local identity when sending `signal` messages.</ResponseField>
+<ResponseField name="token" type="string">Opaque reconnect token. Persist this for the duration of the room. If the socket drops, reconnect and send it in the next `join` to resume the same seat without losing `joinSeq` or triggering a full mesh re-negotiation by all peers.</ResponseField>
+<ResponseField name="me" type="PeerInfo">The joiner's own seat as assigned by the server. `me.team` may differ from the team requested in `join` if the server rebalanced sides.</ResponseField>
+<ResponseField name="hostId" type="string">`peerId` of the current host (the connected peer with the lowest `joinSeq`).</ResponseField>
+<ResponseField name="hostEpoch" type="number">Monotonically increasing counter incremented each time the host changes. Discard any authority game message (damage, flags, clock) that carries an `hostEpoch` lower than the last seen value.</ResponseField>
+<ResponseField name="peers" type="PeerInfo[]">All peers already in the room, **excluding** the joining peer. Open a `RTCPeerConnection` to each one and begin ICE negotiation.</ResponseField>
+<ResponseField name="iceServers" type="IceServer[]">ICE server list, identical to `GET /api/ice`. Use this instead of a separate HTTP call.</ResponseField>
+<ResponseField name="room" type="RoomConfig">The room's static configuration (mode, map, limits). See [RoomConfig fields](#roomconfig-fields).</ResponseField>
+
+  </Accordion>
+
+  <Accordion title="peerJoined — A new peer entered">
+
+Broadcast to all existing peers when a new peer successfully joins. Open a new `RTCPeerConnection` to `peer.peerId` and begin ICE negotiation (the new peer acts as offerer toward all existing peers).
+
+```typescript
+interface PeerJoinedMessage {
+  t: 'peerJoined';
+  peer: PeerInfo;
+  rejoined: boolean;
+}
+```
+
+<ResponseField name="t" type="string">Always `"peerJoined"`.</ResponseField>
+<ResponseField name="peer" type="PeerInfo">Full details of the peer that joined.</ResponseField>
+<ResponseField name="rejoined" type="boolean">`true` when the peer reconnected with a valid `token`. Their previous DataChannel connection is gone — close any existing `RTCPeerConnection` to this `peerId` and renegotiate from scratch.</ResponseField>
+
+  </Accordion>
+
+  <Accordion title="peerLeft — A peer departed">
+
+Sent to all remaining peers when a connection closes (either via a `leave` message or a transport drop).
+
+```typescript
+interface PeerLeftMessage {
+  t: 'peerLeft';
+  peerId: string;
+}
+```
+
+<ResponseField name="t" type="string">Always `"peerLeft"`.</ResponseField>
+<ResponseField name="peerId" type="string">The peer that left. Close and discard the `RTCPeerConnection` to this peer. If the departed peer was the host, wait for a `hostChanged` message.</ResponseField>
+
+  </Accordion>
+
+  <Accordion title="signal — Relayed WebRTC signal">
+
+A signal forwarded from another peer. Feed `payload` directly into the appropriate `RTCPeerConnection` method based on `kind`.
+
+```typescript
+interface RelayedSignalMessage {
+  t: 'signal';
+  from: string;
+  kind: 'offer' | 'answer' | 'ice';
+  payload: unknown;
+}
+```
+
+<ResponseField name="t" type="string">Always `"signal"`.</ResponseField>
+<ResponseField name="from" type="string">`peerId` of the sender.</ResponseField>
+<ResponseField name="kind" type="string">`"offer"` → `setRemoteDescription`; `"answer"` → `setRemoteDescription`; `"ice"` → `addIceCandidate`.</ResponseField>
+<ResponseField name="payload" type="unknown">The raw `RTCSessionDescriptionInit` or `RTCIceCandidateInit` object.</ResponseField>
+
+  </Accordion>
+
+  <Accordion title="hostChanged — Authority transferred">
+
+Sent to all peers when the current host's connection closes. The peer with the next lowest `joinSeq` among connected peers becomes the new host.
+
+```typescript
+interface HostChangedMessage {
+  t: 'hostChanged';
+  hostId: string;
+  hostEpoch: number;
+}
+```
+
+<ResponseField name="t" type="string">Always `"hostChanged"`.</ResponseField>
+<ResponseField name="hostId" type="string">`peerId` of the new host.</ResponseField>
+<ResponseField name="hostEpoch" type="number">Incremented epoch. Discard any buffered authority game messages (damage ticks, flag events, clock updates) that carry an epoch lower than this value — they were sent by the old host and are now stale.</ResponseField>
+
+  </Accordion>
+
+  <Accordion title="error — Protocol or access error">
+
+Sent when the server rejects a message. On a failed `join`, this is immediately followed by a WebSocket close with code `4000`.
+
+```typescript
+interface ErrorMessage {
+  t: 'error';
+  code: string;
+  message?: string;
+}
+```
+
+<ResponseField name="t" type="string">Always `"error"`.</ResponseField>
+<ResponseField name="code" type="string">Machine-readable error code. See the [error codes table](/api/overview#error-model) in the overview.</ResponseField>
+<ResponseField name="message" type="string">Optional human-readable description of the error.</ResponseField>
+
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## PeerInfo type
+
+Every peer is described by a `PeerInfo` object used in `welcome.me`, `welcome.peers`, and `peerJoined.peer`:
+
+```typescript
+interface PeerInfo {
+  peerId: string;
+  name: string;
+  hull: string;
+  turret: string;
+  paint: string | null;
+  team: 'red' | 'blue' | null;
+  joinSeq: number;
+  connected: boolean;
+}
+```
+
+<ResponseField name="peerId" type="string">Stable UUID for this peer within the room session.</ResponseField>
+<ResponseField name="name" type="string">Player call sign.</ResponseField>
+<ResponseField name="hull" type="string">Tank hull asset identifier.</ResponseField>
+<ResponseField name="turret" type="string">Turret asset identifier.</ResponseField>
+<ResponseField name="paint" type="string | null">Paint/skin identifier, or `null` if none.</ResponseField>
+<ResponseField name="team" type="string | null">Team assignment (`"red"` or `"blue"`), or `null` for free-for-all modes.</ResponseField>
+<ResponseField name="joinSeq" type="number">Monotonically increasing join order counter. The connected peer with the **lowest `joinSeq`** is the host. When the host leaves, the peer with the next lowest `joinSeq` that has `connected: true` takes over.</ResponseField>
+<ResponseField name="connected" type="boolean">`true` while the peer's socket is live. A peer briefly has `connected: false` between a transport drop and either a successful reconnect or final eviction.</ResponseField>
+
+---
+
+## RoomConfig fields
+
+The `room` field in `welcome` contains the room's static configuration:
+
+```typescript
+interface RoomConfig {
+  id: string;
+  mode: BattleModeId;
+  mapId: string;
+  mapName: string;
+  host: string;
+  maxPlayers: number;
+  durationMs: number | null;
+  locked: boolean;
+  createdAt: number;
+}
+```
+
+<ResponseField name="id" type="string">Room UUID.</ResponseField>
+<ResponseField name="mode" type="string">Battle mode: `dm`, `tdm`, `ctf`, or `assault`.</ResponseField>
+<ResponseField name="mapId" type="string">Internal map identifier.</ResponseField>
+<ResponseField name="mapName" type="string">Human-readable map name.</ResponseField>
+<ResponseField name="host" type="string">Call sign of the room creator (display label only).</ResponseField>
+<ResponseField name="maxPlayers" type="number">Player cap (2–12).</ResponseField>
+<ResponseField name="durationMs" type="number | null">Battle duration in milliseconds, or `null` for the server default.</ResponseField>
+<ResponseField name="locked" type="boolean">`true` when the room has a password.</ResponseField>
+<ResponseField name="createdAt" type="number">Unix timestamp (ms) when the room was created.</ResponseField>
+
+---
+
+## WebSocket close codes
+
+| Code | Meaning | Action |
+|------|---------|--------|
+| `1000` | Normal closure | The peer sent `leave` and the server acknowledged it. |
+| `1001` | Server restart / going away | The server process is shutting down. **Reconnect** — re-open the socket and send `join` with the saved `token`. |
+| `4000` | Join rejected | The `join` message was refused (bad password, room full, finished, etc.). Do **not** reconnect automatically; surface the `error` frame's `code` to the user. |
+| `4001` | Replaced | Another socket sent a `join` with the same valid `token`. This socket's seat was taken over by the new connection. Do **not** reconnect from this socket. |

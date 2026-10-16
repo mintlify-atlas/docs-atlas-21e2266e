@@ -1,0 +1,233 @@
+---
+title: "SkillTanki Backend Configuration Reference"
+sidebarTitle: "Configuration"
+description: "All CC_* environment variables for the self-hosted Bun backend — Redis, MongoDB, MinIO, room limits, ICE/TURN, logging, and process layout."
+---
+
+All configuration for `packages/backend` is done through `CC_*` environment variables. Bun loads `packages/backend/.env` automatically on start. Every variable has a compiled-in default in `src/config/params.ts` — you only need to set the ones that differ from the defaults.
+
+Copy the example file to get started:
+
+```bash
+cp packages/backend/.env.example packages/backend/.env
+```
+
+<Note>
+  The Cloudflare Worker backend (`apps/server`) shares the three room lifecycle variables — `CC_EMPTY_GRACE_MS`, `CC_REJOIN_TTL_MS`, and `CC_LISTING_STALE_MS` — as `vars` entries in `wrangler.jsonc`. The defaults and semantics are identical between both backends.
+</Note>
+
+---
+
+## Process
+
+<ParamField path="CC_WWWROOT_PORT" type="number" default="30050">
+  The port the HTTP and WebSocket server listens on. When running under the
+  supervisor (`npm run start`), each forked process receives its own port from
+  the `--bootstrap` list (30050, 30051, 30052 by default).
+</ParamField>
+
+<ParamField path="CC_WWWROOT_PATH" type="string" default="">
+  Filesystem path to the compiled PWA shell (`apps/mobile/dist`). When set, the
+  backend serves the shell at `/` after matching API routes first, with an
+  `index.html` SPA fallback for unknown paths.
+
+  When empty, the backend runs in API-only mode — no static files are served.
+  This is the recommended mode when nginx handles the shell directly. See
+  [nginx & Production](/self-hosting/nginx-and-production).
+
+  ```bash
+  CC_WWWROOT_PATH=../../apps/mobile/dist
+  ```
+</ParamField>
+
+<ParamField path="CC_ENABLE_LOGS" type="0 | 1" default="0">
+  Set to `1` to enable structured log rotation to `./logs/backend-<key>.log`
+  via [pinolog](https://github.com/nicolo-ribaudo/pinolog). Logs are written
+  in addition to console output, not instead of it.
+
+  Keep `0` if you collect logs from stdout (e.g. via pm2 or systemd's journal).
+</ParamField>
+
+---
+
+## Redis
+
+Redis stores live room state (JSON), the lobby index, TURN credential cache entries, and pub/sub messages between processes. All keys written by this backend are prefixed with `CC_REDIS_PREFIX`.
+
+<ParamField path="CC_REDIS_HOST" type="string" default="127.0.0.1">
+  Hostname or IP address of the Redis server.
+</ParamField>
+
+<ParamField path="CC_REDIS_PORT" type="number" default="6379">
+  TCP port of the Redis server.
+</ParamField>
+
+<ParamField path="CC_REDIS_USER" type="string" default="default">
+  Redis ACL username. The Docker Compose service in `packages/backend/docker/`
+  runs Redis without ACLs, so the default value `default` is correct for local
+  development.
+</ParamField>
+
+<ParamField path="CC_REDIS_PASSWORD" type="string" default="">
+  Redis AUTH password. Leave empty when Redis runs without a password (the
+  default for the provided Docker Compose service). For production, set a
+  password in both Redis's config and here.
+</ParamField>
+
+<ParamField path="CC_REDIS_PREFIX" type="string" default="skilltanki">
+  String prepended to every Redis key written by this backend (e.g.
+  `skilltanki:room:<id>`, `skilltanki:lobby`, `skilltanki:proc:<id>`).
+
+  Set a unique prefix per logical environment when multiple backends share one
+  Redis instance (e.g. `skilltanki-staging` vs. `skilltanki-prod`).
+</ParamField>
+
+---
+
+## MongoDB
+
+MongoDB stores the room journal: a document is written for every `created`, `playing`, `finished`, and `purged` lifecycle event. It is append-only and not read during normal operation, so a brief MongoDB outage does not affect gameplay.
+
+<ParamField path="CC_MONGO_CONNECTION_STRING" type="string" default="mongodb://127.0.0.1:27017/skilltanki-mobile?wtimeoutMS=15000">
+  Full MongoDB connection string, including the database name and any options.
+  The `wtimeoutMS=15000` default sets a 15-second write timeout so a slow
+  MongoDB does not block a room operation.
+
+  ```bash
+  CC_MONGO_CONNECTION_STRING=mongodb://user:password@mongo.example.com:27017/skilltanki-mobile?wtimeoutMS=15000
+  ```
+</ParamField>
+
+---
+
+## MinIO
+
+MinIO stores and serves the ~180 MB game asset tree (maps, tanks, textures, sounds) at `/assets/*`. Seed it once with `npm run upload-assets -w skilltanki-backend` before starting the backend.
+
+<ParamField path="CC_MINIO_ENDPOINT" type="string" default="127.0.0.1">
+  Hostname or IP address of the MinIO server. For a remote MinIO instance,
+  set this to the server's public hostname or IP (without the protocol).
+</ParamField>
+
+<ParamField path="CC_MINIO_PORT" type="number" default="9000">
+  TCP port of the MinIO S3 API endpoint. The default `9000` matches the
+  Docker Compose service.
+</ParamField>
+
+<ParamField path="CC_MINIO_USE_SSL" type="0 | 1" default="0">
+  Set to `1` to connect to MinIO over HTTPS. Required when MinIO is on a
+  remote host. Leave `0` for localhost connections.
+</ParamField>
+
+<ParamField path="CC_MINIO_ACCESSKEY" type="string" default="minioadmin">
+  MinIO access key (equivalent to an S3 access key ID). The Docker Compose
+  service uses `minioadmin` as both the access key and the secret key.
+  **Change both in production.**
+</ParamField>
+
+<ParamField path="CC_MINIO_SECRETKEY" type="string" default="minioadmin">
+  MinIO secret key (equivalent to an S3 secret access key). **Change this
+  in production** and load it from a secret manager or an environment variable
+  injected at runtime rather than committing it in `.env`.
+</ParamField>
+
+<ParamField path="CC_MINIO_BUCKET" type="string" default="skilltanki-mobile-assets">
+  Name of the MinIO bucket that holds the game assets. The upload script
+  (`scripts/upload-assets.mjs`) creates the bucket if it does not exist and
+  writes to this name.
+</ParamField>
+
+---
+
+## Room lifecycle
+
+These three variables control how the backend manages room state in Redis. They have identical semantics in the Cloudflare Worker backend (set as `vars` in `wrangler.jsonc`).
+
+<ParamField path="CC_EMPTY_GRACE_MS" type="number" default="60000">
+  Milliseconds after which a room that contains no players (all seats are
+  empty or expired) is purged from Redis. Default: 60 seconds.
+
+  Rooms are not deleted immediately when the last player leaves — this grace
+  period lets a player who accidentally closed the tab rejoin without creating
+  a new room.
+</ParamField>
+
+<ParamField path="CC_REJOIN_TTL_MS" type="number" default="120000">
+  Milliseconds a disconnected peer's seat is held before it is released.
+  Default: 120 seconds.
+
+  During this window the peer's rejoin token is valid; reconnecting with the
+  token places the peer back into the same seat. A bot drives the tank
+  while the seat is held. After the TTL expires the seat is freed and the
+  player must join fresh.
+</ParamField>
+
+<ParamField path="CC_LISTING_STALE_MS" type="number" default="600000">
+  Milliseconds after which a lobby listing that has not been updated (no
+  `listing` message from the host) is removed from the public rooms list.
+  Default: 600 seconds (10 minutes).
+
+  The maximum battle duration is also 10 minutes, so a listing that goes
+  silent for a full session is always stale.
+</ParamField>
+
+---
+
+## ICE / TURN
+
+The backend mints short-lived TURN credentials and returns them from `GET /api/ice` so that players behind carrier-grade NAT can relay WebRTC traffic. Out of the box, the project's own Cloudflare Realtime TURN key is baked into `src/config/params.ts`, so relay works with no configuration.
+
+<ParamField path="CC_ICE_STUN_URLS" type="string" default="stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478">
+  Comma-separated list of STUN server URLs returned in the ICE config. The
+  defaults are Google's and Cloudflare's public STUN servers, both confirmed
+  reachable.
+
+  ```bash
+  CC_ICE_STUN_URLS=stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478
+  ```
+</ParamField>
+
+<ParamField path="CC_ICE_TURN_URL" type="string" default="">
+  Comma-separated list of TURN server URLs for your own relay. When set, the
+  backend uses this relay instead of minting Cloudflare Realtime credentials.
+
+  ```bash
+  CC_ICE_TURN_URL=turn:relay.example.com:3478,turns:relay.example.com:5349
+  ```
+</ParamField>
+
+<ParamField path="CC_ICE_TURN_USERNAME" type="string" default="">
+  Username for the TURN server specified in `CC_ICE_TURN_URL`. Only used when
+  `CC_ICE_TURN_URL` is set.
+</ParamField>
+
+<ParamField path="CC_ICE_TURN_CREDENTIAL" type="string" default="">
+  Credential (password) for the TURN server specified in `CC_ICE_TURN_URL`.
+  Load this from a secret manager or a runtime environment variable — do not
+  commit it in `.env`.
+</ParamField>
+
+<ParamField path="CC_CF_TURN_KEY_ID" type="string" default="(project default)">
+  Cloudflare Realtime TURN key ID. Overrides the key baked into
+  `src/config/params.ts`. Set to `none` to disable Cloudflare relay entirely
+  (useful when you supply your own relay via `CC_ICE_TURN_URL`).
+
+  ```bash
+  CC_CF_TURN_KEY_ID=your-key-id-here
+  ```
+</ParamField>
+
+<ParamField path="CC_CF_TURN_API_TOKEN" type="string" default="(project default)">
+  Cloudflare Realtime API token paired with `CC_CF_TURN_KEY_ID`. This is a
+  secret — do not store it in `.env` in production. Inject it from a secret
+  manager or a sealed environment variable.
+</ParamField>
+
+<ParamField path="CC_CF_TURN_TTL_S" type="number" default="86400">
+  Lifetime of minted Cloudflare TURN credentials in seconds. Default: 86400 (24
+  hours). The minimum accepted value is 600 (10 minutes) — smaller values are
+  clamped up.
+
+  Credentials are cached in Redis for **half** the TTL so they are refreshed
+  before they expire. The cached key is `<prefix>:ice:cloudflare`.
+</ParamField>

@@ -1,0 +1,103 @@
+---
+title: "SkillTanki: Open-Source Browser Tank Arcade"
+sidebarTitle: "Introduction"
+description: "SkillTanki is a free browser tank arcade with 7 hulls, 9 turrets, 91 maps, smart bots, and WebRTC multiplayer. No registration required."
+---
+
+SkillTanki is a free, open-source browser tank arcade that recreates the feel of the classic 2010 tank game — angular hulls, boxy maps, heavy suspension physics — as a modern PWA. Open the page and you are in a battle within seconds: no registration, no pay-to-win, no shop. Pick a call sign, choose your tank and map, and play immediately against smart bots or other people over WebRTC.
+
+For **developers and self-hosters**, the repository is a TypeScript monorepo containing the full PWA client, a zero-ops Cloudflare Workers backend, and a bring-your-own-server Bun backend that speaks the same protocol. Every piece builds and tests independently.
+
+## Repository layout
+
+The project is an npm workspace monorepo. Here is what lives in each directory:
+
+- **`apps/mobile/`** — The game itself. A Vite + TypeScript PWA targeting phones (touch controls, home-screen install, gamepad support) that also runs fully in a desktop browser. Rendering is handled by PlayCanvas (WebGL); the original ActionScript 3 physics and weapons engine has been ported line-for-line into TypeScript and lives in `src/engine/`. Application-layer services — battle logic, UI, controls, bot AI, and multiplayer — are wired together with `di-kit` dependency injection. Service workers and the installable shell are provided by `vite-plugin-pwa`.
+
+- **`apps/server/`** — Backend v2, deployed as a single Cloudflare Worker. Routes are defined with Hono. Each room is a Durable Object with a private SQLite database; the lobby index lives in a second Durable Object. KV stores small caches like minted TURN credentials. R2 holds the ~180 MB of game assets. Workers Static Assets serves the PWA shell, with the worker intercepting `/api/*`, `/ws/*`, and `/assets/*` first.
+
+- **`packages/backend/`** — Backend v3, for self-hosters. The same protocol as `apps/server`, implemented on Bun + Hono. Live rooms and the lobby index are stored in Redis (JSON + hash); a room journal is written to MongoDB; assets are served from MinIO. A built-in supervisor spawns one process per port so you can run several behind a load balancer with no sticky sessions — all shared state lives in Redis.
+
+- **`assets/`** — All game data: maps, tank models, textures, and sounds. Tracked with git-lfs; never bundled into the PWA shell. Both backends serve these files at `/assets/*`.
+
+- **`config/nginx.conf`** — Recommended reverse proxy config for `packages/backend` in production: TLS + HTTP/2, PWA shell served by nginx, WebSocket upgrades, 30-day asset disk cache, `least_conn` load balancing across the three Bun processes.
+
+- **`scripts/`** — Root-level build helpers: `build.mjs` assembles `build/public` (the PWA shell), `upload-assets.mjs` pushes `assets/` to R2 or MinIO with md5-based skipping.
+
+<Note>
+  The `assets/` directory is managed with **git-lfs**. Run `git lfs pull` after cloning before you attempt to upload or serve assets. Without it the files on disk are pointer stubs, not real game data.
+</Note>
+
+## Tech stack
+
+<CardGroup cols={2}>
+  <Card title="Client (apps/mobile)" icon="browser">
+    **Vite 6** — dev server and production bundler
+
+    **PlayCanvas 2.23** — WebGL rendering engine
+
+    **TypeScript AS3 physics port** — the original game's hull physics, collision, and weapon simulation, faithfully ported from ActionScript 3
+
+    **di-kit** — lightweight dependency injection that wires battle, UI, controls, bot, and multiplayer services
+
+    **vite-plugin-pwa** — service worker, manifest, and home-screen install
+
+    **WebRTC** — full data-channel mesh between players (up to 12 per room); the backend only handles signalling
+  </Card>
+  <Card title="Cloudflare backend (apps/server)" icon="cloud">
+    **Hono** — fast, edge-native HTTP router
+
+    **Durable Objects with SQLite** — one object per room, one for the lobby index; strongly consistent, no external database
+
+    **KV** — lightweight cache for minted TURN credentials
+
+    **R2** — stores the ~180 MB asset bundle; served directly at `/assets/*`
+
+    **Workers Static Assets** — delivers the PWA shell from the same origin
+
+    **wrangler 4** — local dev (`:8787`), deploy, and secret management
+  </Card>
+  <Card title="Self-hosted backend (packages/backend)" icon="server">
+    **Bun 1.2+** — runtime and package manager for the backend
+
+    **Hono** — same router as the Cloudflare path
+
+    **ioredis** — room state (Redis JSON), lobby index (Redis hash), TURN cache, pub/sub fan-out between processes
+
+    **mongoose** — room journal in MongoDB
+
+    **minio** — S3-compatible asset storage (local MinIO or any S3 endpoint)
+
+    **pinolog** — structured process logging
+  </Card>
+  <Card title="Tooling & testing" icon="wrench">
+    **TypeScript 5.6** across all packages
+
+    **Playwright** — end-to-end tests drive two fake peers through the full signalling flow (lobby, join, host migration, rejoin)
+
+    **npm workspaces** — single `npm install` at the root wires all packages
+
+    **`?bench=…` URL param** — headless bot benchmark battle with a JSON report, no browser UI needed
+  </Card>
+</CardGroup>
+
+## Protocol
+
+Both backends expose exactly the same HTTP + WebSocket contract. The mobile client selects a backend via the `CC_API_PROXY` environment variable at dev time (or by origin in production) and never has to know which implementation it is talking to.
+
+| Endpoint | Direction | Purpose |
+|---|---|---|
+| `GET /api/rooms` | Client → Backend | List open rooms (filterable by mode) |
+| `POST /api/rooms` | Client → Backend | Create a new room |
+| `GET /api/ice` | Client → Backend | Fetch TURN credentials (minted per-request, cached server-side) |
+| `WS /ws/room/:id` | Client ↔ Backend | Per-room signalling socket: `join`, `welcome`, `signal`, `listing`, `leave`, `peerJoined`, `peerLeft`, `hostChanged` |
+| `GET /assets/*` | Client → Backend | Serve map geometry, textures, sounds, and tank models from R2 or MinIO |
+
+Shared types are defined once in `apps/server` and **copied** into `packages/backend` as `src/model/protocol.ts`. No cross-package import exists by design, so each package compiles and fails in isolation.
+
+## Key principles
+
+- **No registration, no pay-to-win.** All 7 hulls, 9 turrets, 50+ maps, and every game mode are available from the first second. There is no shop, no unlock grind, and no premium tier.
+- **Skill-based balance.** Damage spread and falloff, weakened double-damage, spawn protection, and free spawn points are all tuned so a better player wins — not a more-purchased player.
+- **Independent packages.** `apps/mobile`, `apps/server`, and `packages/backend` do not import each other. Shared types are copied across package boundaries. This means any package can be built, type-checked, or tested alone without the others being present or building successfully.
+- **Two interchangeable backends.** The Cloudflare path requires zero infrastructure (just a `wrangler deploy`). The self-hosted path runs on any VPS with Docker. Both serve the same client without modification.

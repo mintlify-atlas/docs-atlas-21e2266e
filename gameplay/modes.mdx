@@ -1,0 +1,124 @@
+---
+title: "Battle Modes in SkillTanki Explained"
+sidebarTitle: "Modes"
+description: "SkillTanki has five battle modes: Deathmatch, Team Deathmatch, Capture the Flag, Assault, and Explore. Learn the rules and objectives for each."
+---
+
+SkillTanki ships five distinct battle modes, covering solo play, team coordination, and objective-driven tactics — plus a peaceful Explore option for learning maps without pressure. Every mode works in single-player (against bots) and in multiplayer rooms of up to 12 players.
+
+## Choosing a mode
+
+When you create a room (or start a solo battle), you pick the mode before the match begins. The rooms list on the lobby screen can be filtered by mode using the `?mode=` query parameter: `?mode=dm`, `?mode=tdm`, `?mode=ctf`, `?mode=assault`, or `?mode=explore`.
+
+## Room settings
+
+Each room has two universal settings that apply across all modes:
+
+| Setting | Options |
+|---------|---------|
+| **Duration** | 5 min · 10 min · 15 min · 20 min |
+| **Players** | 2 – 12 (full mesh WebRTC, 6 v 6 maximum in team modes) |
+
+Rooms can also be **public** (visible in the lobby list) or **private** (password-protected, shown with a lock icon).
+
+---
+
+## The five modes
+
+<AccordionGroup>
+
+<Accordion title="Deathmatch (dm) — every tank for itself">
+**Objective:** Score the most kills before time runs out. Every destroyed tank — whoever fired the killing shot — adds one point to that shooter's personal score. There are no teams; all other tanks are enemies.
+
+**Win condition:** The player with the highest kill count when the clock hits zero wins. Ties go to whoever reached that score first.
+
+**Scoring display:** A live scoreboard shows all players ranked by kills. Press **Tab** (keyboard) or the score button (touch/gamepad) at any time to inspect the full table mid-battle.
+
+**Bots in Deathmatch:** Bots hunt actively and seek vantage points on the map. Each bot uses its weapon intelligently — Shaft bots tap at close range and charge from a distance, Isida bots prioritise healing a wounded self over attacking. Bot difficulty (Easy / Normal / Hard) scales reaction time, aim error, and target-lead accuracy, and is calibrated to a measurable kill-death ratio against a human.
+
+**Best for:** Quick reflexes, 1-v-1 duels, or chaotic multi-tank melees. Ideal starting mode for new players because there are no objectives to track — just survive and shoot back.
+</Accordion>
+
+<Accordion title="Team Deathmatch (tdm) — red vs blue">
+**Objective:** Your team — Red or Blue — must accumulate more combined kills than the opposing team by the end of the match.
+
+**Win condition:** The team with the higher aggregate kill count wins. Individual kills still appear on the scoreboard, but only team totals decide the outcome.
+
+**Teams:** Players are split into Red and Blue before spawn. In the room creation form you can choose your preferred side; bots are distributed to keep team sizes balanced (the engine's `ModeRuleService.assignTeams` logic evens the sides automatically).
+
+**Friendly fire:** There is no friendly fire. Shooting a teammate does no damage — so jets (Firebird, Freeze) and area weapons (Thunder, Nuclear Energy supply) are safe to use near allies.
+
+**Scoring display:** The HUD shows both teams' running totals. The full kill-by-kill breakdown is on the Tab scoreboard.
+
+**Bots in Team Deathmatch:** Team bots share a blackboard and coordinate roles: escorts protect weaker allies, ambush positions are staged collectively, and supplies (Nitro to chase, Double Armour under fire, Repair Kit when hurt) are used with intent rather than on cooldown.
+
+**Best for:** Coordinated play with friends in a private room, or as a stepping stone to learning objective modes.
+</Accordion>
+
+<Accordion title="Capture the Flag (ctf) — steal and return">
+**Objective:** Carry the **enemy team's flag** back to your own base. Your base must be holding your own flag at the moment you deliver the enemy flag — if your flag has been stolen, the capture is blocked until a teammate retrieves it.
+
+**Scoring:**
+- Each successful flag capture scores one point for your team.
+- The team with more captures when time expires wins.
+- If scores are tied at the end, the match is a draw.
+
+**Flag states:**
+| State | Icon | What it means |
+|-------|------|---------------|
+| **Home** | Steady flag | Your flag is safe at base; enemy captures are allowed. |
+| **Carried** | Animated trail | A player is running the flag; follow the carrier dot on the map. |
+| **Dropped** | Pulsing flag | The carrier was destroyed; any teammate can reclaim it by driving over it; enemy can also pick it up. |
+
+**Roles:** Attack (flag grab, flag run), Defence (guard your flag, intercept the enemy carrier), and Escort (cover the carrier) emerge naturally. The Isida beam excels at escort: aim at a teammate to heal them while they sprint home.
+
+**Bots in CTF:** Bots take explicit auctioned roles — flag runner, escort, interceptor, base defender. They know the flag routes on the current map, time their attack together, and react to a dropped flag immediately.
+
+**Best for:** The highest-coordination mode; rewards communication and map awareness over raw fragging.
+</Accordion>
+
+<Accordion title="Assault — deliver your own flag">
+**Objective:** Carry **your own team's flag** to the **enemy base** and deliver it there. Unlike CTF, you protect your flag rather than stealing the opponent's.
+
+**Win condition:** The team that delivers their flag to the enemy base more times before time runs out wins.
+
+**Key difference from CTF:** In Assault the flag carrier must push forward into enemy territory. There is no "defend your base while attacking" duality — both teams are simultaneously trying to advance their flag, turning the map into a collision of two convoys.
+
+**Tactical note:** Fast hulls (Wasp, Hornet) are especially strong as flag runners because the delivery zone is deep in enemy territory. Heavy hulls (Titan, Mammoth) work well as blockers along predictable flag routes.
+
+**Bots in Assault:** Bots split into carrier, escort, and blocker roles on the fly, re-evaluate the role auction when the carrier is destroyed, and stage ambushes at map chokepoints.
+
+**Best for:** Players who prefer aggressive, forward-pushing tactics over base defence.
+</Accordion>
+
+<Accordion title="Explore — drive freely, no combat">
+**Objective:** There is no objective. Explore lets you drive any map without weapons, bots, damage, or scoring. Your turret does not fire, no damage is applied, and there is no timer.
+
+**Use cases:**
+- Learning a map's layout, ramps, shortcuts, and water hazards before a competitive match.
+- Showcasing maps to a friend in a private room.
+- Testing how a hull handles on specific terrain (suspension bounce, ramp launches, narrow passages).
+- Developers: verifying a new or modified map's navigation grid with `?debug=nav` in the URL.
+
+**Bots in Explore:** No bots are spawned; it would not make sense without combat. You can drive alone or invite others into a private Explore room.
+
+**Best for:** New players learning the map pool, or anyone who wants a stress-free session.
+</Accordion>
+
+</AccordionGroup>
+
+---
+
+## How bots scale across modes
+
+Bot intelligence adapts to the current mode rather than running one fixed routine:
+
+- **Deathmatch** — bots hunt, pick elevated vantage points, and use Nitro to close gaps on fleeing tanks.
+- **Team modes (TDM, CTF, Assault)** — bots share a team blackboard and auction roles (carrier, escort, interceptor, defender) every time the situation changes. They stage coordinated pushes and retreat to regroup when their team is exposed.
+- **Explore** — no bots.
+
+Bot difficulty sets the reaction delay before the first shot, the magnitude of the aim wander, the target-lead error, and the turret traversal lag. **Easy** bots are forgiving for newcomers; **Hard** bots are calibrated by kill-death ratio against an experienced human and will use every supply at the tactically correct moment.
+
+<Tip>
+  Start with a solo Deathmatch against 5 Normal bots on `island_old_summer` (the default map) to get a feel for your hull and turret before joining a live room.
+</Tip>

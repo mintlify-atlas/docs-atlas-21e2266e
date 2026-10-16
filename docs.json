@@ -1,72 +1,95 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "SkillTanki",
+  "theme": "almond",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
-  },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
+    "primary": "#8ee07c",
+    "light": "#545249",
+    "dark": "#c4b5a7"
   },
   "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "light": "https://media.brand.dev/2ca78614-3251-4676-b44a-7867eae493eb.webp",
+    "dark": "https://media.brand.dev/2ca78614-3251-4676-b44a-7867eae493eb.webp"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:support@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/skilltanki/game"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/skilltanki/game"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guide",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Gameplay",
+            "pages": [
+              "gameplay/modes",
+              "gameplay/tanks",
+              "gameplay/supplies-and-maps",
+              "gameplay/controls"
+            ]
+          },
+          {
+            "group": "Multiplayer",
+            "pages": [
+              "multiplayer/rooms",
+              "multiplayer/webrtc-and-ice",
+              "multiplayer/host-migration"
+            ]
+          },
+          {
+            "group": "Bots",
+            "pages": [
+              "bots/overview",
+              "bots/ai-and-navigation"
+            ]
+          },
+          {
+            "group": "Self-Hosting",
+            "pages": [
+              "self-hosting/cloudflare-backend",
+              "self-hosting/bun-backend",
+              "self-hosting/configuration",
+              "self-hosting/nginx-and-production"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Backend Protocol",
+            "pages": [
+              "api/overview",
+              "api/rooms",
+              "api/ice",
+              "api/signalling"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "api/dev-tools",
+              "api/asset-pipeline"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

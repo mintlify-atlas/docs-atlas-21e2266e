@@ -1,0 +1,128 @@
+---
+title: "WebRTC Mesh and ICE Configuration in SkillTanki"
+sidebarTitle: "WebRTC & ICE"
+description: "SkillTanki uses a full WebRTC data-channel mesh. The backend only signals — tanks communicate directly. Learn the mesh model, ICE setup, and TURN relay."
+---
+
+SkillTanki's multiplayer is built on a **full peer-to-peer mesh** of WebRTC data channels. Every peer opens a `RTCDataChannel` directly to every other peer in the room — up to 12 tanks means up to **66 simultaneous data channels**. The backend never touches battle traffic; it only matches players, provides ICE configuration, and relays WebRTC signalling messages until the peer connections are established.
+
+---
+
+## Authority model
+
+One peer in every room is the **host** — the peer with the lowest `joinSeq` among all currently connected peers. The host is the single source of truth for:
+
+- Damage dealt and hit validation
+- Deaths, respawns, and spawn-protection timers
+- Flag captures, flag state, and score
+- The battle clock
+
+All other peers **simulate their own tank** locally and send their movement and aim over the mesh. The host runs the hit-detection pass on every incoming hit claim, clamps each hit to the weapon's maximum damage, enforces the weapon's reload time, and drops any claim that is geometrically impossible given the reported positions. Claims that pass are broadcast back as authoritative damage events.
+
+When the host disconnects, the peer with the next-lowest `joinSeq` automatically becomes the new host. See [Host Migration](/multiplayer/host-migration) for the full promotion flow.
+
+---
+
+## ICE flow
+
+Before a peer can connect to the signalling socket it needs ICE server configuration. Call `GET /api/ice` to fetch a list of `IceServer` objects suitable for passing directly to `RTCPeerConnection`:
+
+```typescript
+export interface IceServer {
+  urls: string | string[];
+  username?: string;    // present for TURN servers
+  credential?: string;  // present for TURN servers
+}
+```
+
+A typical response contains one STUN entry and one TURN entry:
+
+```json
+{
+  "status": "ok",
+  "iceServers": [
+    { "urls": ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
+    {
+      "urls": ["turn:turn.cloudflare.com:3478", "turns:turn.cloudflare.com:5349"],
+      "username": "...",
+      "credential": "..."
+    }
+  ]
+}
+```
+
+The same `iceServers` array is also embedded in the `welcome` message sent over the signalling socket immediately after a successful `join`, so a client that connects to the socket first and reads the `welcome` does not need to call `/api/ice` separately.
+
+### Default STUN servers
+
+Out of the box, the backend returns two public STUN servers:
+
+- `stun:stun.l.google.com:19302`
+- `stun:stun.cloudflare.com:3478`
+
+These can be overridden with the `CC_ICE_STUN_URLS` environment variable (comma-separated).
+
+### TURN relay
+
+TURN credentials are **minted on the fly** from the project's Cloudflare Realtime TURN key, then cached in Redis for half of their validity period. A fresh checkout works out of the box with the project's own key; you can override it with your own key via `CC_CF_TURN_KEY_ID` and `CC_CF_TURN_API_TOKEN`, or supply a static TURN server via `CC_ICE_TURN_URL` / `CC_ICE_TURN_USERNAME` / `CC_ICE_TURN_CREDENTIAL`.
+
+<Note>
+  TURN credentials are short-lived tokens minted by calling the Cloudflare Realtime API. The backend caches the minted credentials in Redis (or Cloudflare KV on the Worker backend) for half of their TTL (default TTL is 86 400 s; cached for 43 200 s). This means all peers joining around the same time share the same credentials and only one Cloudflare API call is needed per cache window. Set `CC_CF_TURN_TTL_S` to adjust the credential lifetime (minimum 600 s).
+</Note>
+
+---
+
+## LAN play
+
+When all players are on the same Wi-Fi network, WebRTC's **ICE host candidates** (direct LAN IP addresses) are gathered and tried first. If the candidates match, the data channels are established directly between the phones over the local network — no STUN lookup, no TURN relay, no internet traffic during the battle. STUN and TURN only come into play for players behind carrier-grade NAT or on different networks.
+
+---
+
+## Signalling socket
+
+The signalling endpoint is a WebSocket at **`/ws/room/:id`** (where `:id` is the room UUID). The socket is used exclusively to exchange peer-discovery and WebRTC negotiation messages; no game state flows through it.
+
+### Message flow
+
+```
+Client                               Server
+  │                                    │
+  │── join ──────────────────────────► │  (first frame; must be a JoinMessage)
+  │◄─ welcome ──────────────────────── │  (peerId, token, peers, iceServers, room)
+  │                                    │
+  │── signal {to, kind, payload} ────► │  (offer / answer / ice candidate)
+  │◄─ signal {from, kind, payload} ─── │  (relayed from another peer)
+  │                                    │
+  │◄─ peerJoined ───────────────────── │  (a new peer arrived)
+  │◄─ peerLeft ─────────────────────── │  (a peer disconnected)
+  │◄─ hostChanged ──────────────────── │  (host migration completed)
+```
+
+The `signal` message carries an opaque `payload` field — the raw `RTCSessionDescriptionInit` or `RTCIceCandidateInit` — that the server passes through to the target peer without inspection.
+
+### Signal size limit
+
+Any signalling payload larger than **16 384 bytes** (`CC_MAX_SIGNAL_BYTES = 16 * 1024`) is dropped by the server without forwarding. Standard SDP offers and ICE candidates are well within this limit; only abnormal offers (e.g. ones with hundreds of media sections) would approach it.
+
+### Message serialisation
+
+All socket frames are UTF-8 JSON. Binary frames are not used. The socket is sequential per peer — the server processes each frame to completion before starting the next, so a `signal` frame cannot overtake the `join` frame that preceded it.
+
+---
+
+## `hostEpoch`
+
+Every `welcome` and `hostChanged` message carries a `hostEpoch` integer. The epoch starts at `1` when the room is created and increments each time a host migration occurs.
+
+```typescript
+// In WelcomeMessage and HostChangedMessage:
+hostId: string;
+hostEpoch: number;
+```
+
+Peers attach the current `hostEpoch` to every authoritative message they send over the mesh (damage, deaths, score, clock). When a peer receives an authority message it checks the epoch against the one in its latest `welcome` or `hostChanged`:
+
+- **Same epoch** — the message is from the current host; process it.
+- **Stale epoch** — the message is from a former host that has not yet learned it was demoted; drop it silently.
+
+This prevents a briefly-disconnected old host from re-applying damage or score updates after a new host has already taken over.

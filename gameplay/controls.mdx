@@ -1,0 +1,145 @@
+---
+title: "SkillTanki Controls: Touch, Keyboard, and Gamepad"
+sidebarTitle: "Controls"
+description: "SkillTanki supports touch, keyboard, and gamepad controls simultaneously. Full binding reference for battle, garage, and menus."
+---
+
+SkillTanki supports **three control schemes at the same time** — touch, keyboard, and gamepad. You can switch between them mid-battle without changing any setting; the game reads all three inputs simultaneously. A gamepad connected over Bluetooth or USB is detected automatically through the browser's standard Gamepad API.
+
+<Tabs>
+
+<Tab title="Touch">
+
+Touch controls are optimised for phones but work on any touch-capable display. The screen is split into two halves.
+
+**Left half — movement**
+
+| Control | Action |
+|---------|--------|
+| **Floating joystick** | Drive — push in any direction to accelerate, steer, or reverse. The joystick appears wherever you place your thumb and floats within a boundary zone so it never drifts out of reach. |
+
+**Right half — combat and camera**
+
+| Control | Action |
+|---------|--------|
+| **Fire button** | Fires the turret. Hold for weapons that charge (Shaft) or sustain (Firebird, Freeze, Isida). |
+| **Turret button** | Rotates the turret manually (left / right arrow buttons). |
+| **Centre button** | Snaps the turret to face the same direction as the hull. |
+| **Camera button** | Shifts the camera angle (cycle or hold). |
+| **Self-destruct button** | Hold to destroy your own tank (e.g. to escape a stuck position). |
+
+**Supply bar (HUD)**
+
+Five supply icons are displayed on the HUD. Tap the icon for that slot to activate:
+
+| Slot | Supply |
+|------|--------|
+| 1 | Repair Kit |
+| 2 | Double Armour |
+| 3 | Double Damage |
+| 4 | Nitro |
+| 5 | Nuclear Energy |
+
+A cooldown arc over each icon shows how much time remains before it can be used again.
+
+<Tip>
+  On small screens, try adjusting your grip so your right thumb can reach both the Fire button and the supplies bar without lifting. Most players keep Fire on the index finger and swipe supplies with the thumb.
+</Tip>
+
+</Tab>
+
+<Tab title="Keyboard">
+
+Full keyboard support for desktop players. WASD and arrow keys are both active simultaneously — use whichever you prefer.
+
+**Battle bindings**
+
+| Key(s) | Action |
+|--------|--------|
+| `W` `A` `S` `D` | Drive (forward, left, back, right) |
+| `↑` `←` `↓` `→` | Drive (alternative) |
+| `Z` | Rotate turret left |
+| `X` | Rotate turret right |
+| `C` | Centre turret (snap to hull direction) |
+| `Space` | Fire (hold for Shaft charge / jet weapons) |
+| `Q` | Camera rotate left |
+| `E` | Camera rotate right |
+| `1` | Repair Kit |
+| `2` | Double Armour |
+| `3` | Double Damage |
+| `4` | Nitro |
+| `5` | Nuclear Energy |
+| `0` *(hold)* | Self-destruct |
+| `Tab` | Toggle score table |
+| `Escape` | Pause / open menu |
+
+**Tips for keyboard play**
+
+- **Turret and movement are independent.** You can drive forward with `W` while rotating the turret left with `Z` — essential for circle-strafing.
+- **Centre turret (`C`)** is useful after a 180° retreat: re-centre before the next engagement so you know where you are aiming.
+- **Supply keys 1–5** sit directly on the number row; muscle memory develops quickly after a few matches.
+
+</Tab>
+
+<Tab title="Gamepad">
+
+SkillTanki uses the browser's **standard gamepad mapping** (Xbox / PlayStation layouts both work). Connect via Bluetooth or USB — the browser detects it automatically, no driver or extension needed.
+
+**Battle bindings**
+
+| Input | Action |
+|-------|--------|
+| **Left stick** | Drive (push forward/back to accelerate/reverse, left/right to steer) |
+| **Right stick** | Rotate turret + tilt camera |
+| **R1 / Cross (×)** | Fire (hold for Shaft charge / jet weapons) |
+| **D-pad Up** | Repair Kit (supply 1) |
+| **D-pad Right** | Double Armour (supply 2) |
+| **D-pad Down** | Double Damage (supply 3) |
+| **D-pad Left** | Nitro (supply 4) |
+| **R3** (right stick click) | Nuclear Energy (supply 5) |
+| **L3** *(hold)* (left stick click) | Self-destruct |
+| **Start** | Pause / open menu |
+| **Select / Back** | Toggle score table |
+
+**Menu and lobby bindings**
+
+| Input | Action |
+|-------|--------|
+| **D-pad / Left stick** | Arrow keys (navigate menus, move between options) |
+| **Cross (×)** | Confirm / Enter |
+| **Circle (○)** | Cancel / Escape |
+
+**Notes on Shaft with a gamepad:**
+
+Hold **R1 or Cross** to begin the Shaft charge. The longer you hold, the more powerful the shot when you release. The targeting laser becomes visible during the hold — both a telegraph to you and a warning to your target.
+
+<Tip>
+  During development, append `?gamepad=sim` to the game URL to open a virtual gamepad in a popup window. The popup reads pointer input and injects it through the real Gamepad API — useful for testing gamepad-specific UI flows on a machine with no physical controller attached.
+</Tip>
+
+</Tab>
+
+</Tabs>
+
+---
+
+## Controls summary card
+
+| Action | Touch | Keyboard | Gamepad |
+|--------|-------|----------|---------|
+| Drive | Left joystick | WASD / Arrows | Left stick |
+| Turret rotate | Turret buttons | Z / X | Right stick |
+| Centre turret | Centre button | C | — |
+| Fire | Fire button | Space | R1 / Cross |
+| Camera | Camera button | Q / E | Right stick (tilt) |
+| Supply 1 (Repair) | HUD slot 1 | `1` | D-pad Up |
+| Supply 2 (Armour) | HUD slot 2 | `2` | D-pad Right |
+| Supply 3 (Damage) | HUD slot 3 | `3` | D-pad Down |
+| Supply 4 (Nitro) | HUD slot 4 | `4` | D-pad Left |
+| Supply 5 (Nuclear) | HUD slot 5 | `5` | R3 |
+| Self-destruct | Hold button | Hold `0` | Hold L3 |
+| Score table | Score button | Tab | Select |
+| Pause | — | Escape | Start |
+| Menu navigation | Tap | Arrow keys | D-pad / Left stick |
+| Menu confirm | Tap | Enter | Cross (×) |
+| Menu back | Tap back | Escape | Circle (○) |

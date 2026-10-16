@@ -1,0 +1,127 @@
+---
+title: "GET /api/ice — ICE Server Configuration"
+sidebarTitle: "ICE Servers"
+description: "Fetch STUN and TURN server credentials for WebRTC peer connections. Credentials are minted on the fly and cached. No auth required."
+---
+
+## Overview
+
+Before opening any `RTCPeerConnection`, the game client calls `GET /api/ice` to retrieve the list of ICE servers to pass as `iceServers` in the `RTCConfiguration`. This list is also delivered automatically in the [`welcome`](/api/signalling#server--client-messages) socket message after a successful join, so clients that connect via the signalling socket do not need to call this endpoint separately.
+
+---
+
+## GET /api/ice
+
+```
+GET /api/ice
+```
+
+No query parameters. No request body.
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "iceServers": [
+    { "urls": "stun:stun.l.google.com:19302" },
+    { "urls": "stun:stun.cloudflare.com:3478" },
+    {
+      "urls": [
+        "turn:turn.cloudflare.com:3478?transport=udp",
+        "turn:turn.cloudflare.com:3478?transport=tcp",
+        "turns:turn.cloudflare.com:5349?transport=tcp"
+      ],
+      "username": "a1b2c3d4…",
+      "credential": "e5f6g7h8…"
+    }
+  ]
+}
+```
+
+<ResponseField name="status" type="string">Always `"ok"` on success.</ResponseField>
+<ResponseField name="iceServers" type="IceServer[]">Array of ICE server descriptors, ready to be spread directly into `RTCConfiguration.iceServers`.</ResponseField>
+
+### IceServer type
+
+```typescript
+interface IceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+```
+
+<ResponseField name="urls" type="string | string[]">A single server URI or an array of URIs for the same server (e.g. one TURN server advertising UDP, TCP, and TLS transports at once).</ResponseField>
+<ResponseField name="username" type="string">TURN username. Present only on TURN entries; absent on STUN entries.</ResponseField>
+<ResponseField name="credential" type="string">TURN credential (password). Present only on TURN entries; absent on STUN entries.</ResponseField>
+
+---
+
+## Default configuration
+
+Out of the box, the backend mints three entries:
+
+| Type | Server | Notes |
+|------|--------|-------|
+| STUN | `stun:stun.l.google.com:19302` | Google's public STUN |
+| STUN | `stun:stun.cloudflare.com:3478` | Cloudflare's public STUN |
+| TURN | `turn.cloudflare.com` (UDP + TCP + TLS) | Cloudflare Realtime, credentials minted per TTL |
+
+The TURN credentials are minted from the project's baked-in Cloudflare Realtime key (`CC_DEFAULT_CF_TURN_KEY_ID`) so that a fresh checkout works out of the box. Override this with your own key:
+
+| Environment variable | Default | Description |
+|----------------------|---------|-------------|
+| `CC_CF_TURN_KEY_ID` | *(baked-in project key)* | Cloudflare Realtime TURN key ID. Set to `"none"` to disable Cloudflare TURN. |
+| `CC_CF_TURN_API_TOKEN` | *(baked-in project token)* | API token used to mint short-lived TURN credentials. |
+| `CC_CF_TURN_TTL_S` | `86400` (24 h) | Lifetime of minted TURN credentials in seconds. Minimum 600. |
+| `CC_ICE_STUN_URLS` | `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478` | Comma-separated list of STUN URLs that replace the defaults. |
+| `CC_ICE_TURN_URL` | *(none)* | Comma-separated TURN URL(s) for a custom TURN server. |
+| `CC_ICE_TURN_USERNAME` | *(empty)* | Static username for the custom TURN server. |
+| `CC_ICE_TURN_CREDENTIAL` | *(empty)* | Static credential for the custom TURN server. |
+
+---
+
+## Credential caching
+
+Minting TURN credentials requires an outbound API call to Cloudflare Realtime. To avoid doing this on every client request, the backend caches credentials in:
+
+- **Bun backend** — Redis key `<CC_REDIS_PREFIX>:ice:cloudflare`, TTL set to half of `CC_CF_TURN_TTL_S`.
+- **Cloudflare Worker** — KV store, same half-TTL policy.
+
+All clients served within the same half-TTL window share the same credentials. A new set of credentials is minted automatically when the cached entry expires.
+
+---
+
+## curl example
+
+```bash
+curl "https://example.com/api/ice"
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "iceServers": [
+    { "urls": "stun:stun.l.google.com:19302" },
+    { "urls": "stun:stun.cloudflare.com:3478" },
+    {
+      "urls": [
+        "turn:turn.cloudflare.com:3478?transport=udp",
+        "turn:turn.cloudflare.com:3478?transport=tcp",
+        "turns:turn.cloudflare.com:5349?transport=tcp"
+      ],
+      "username": "1718001234:abcdef01",
+      "credential": "ZXhhbXBsZWNyZWRlbnRpYWw="
+    }
+  ]
+}
+```
+
+---
+
+## LAN play
+
+On a local network, WebRTC's ICE gathering collects **host candidates** — the device's own LAN IP addresses — before it ever contacts STUN or TURN. Two phones on the same Wi-Fi will connect peer-to-peer directly using those host candidates without any STUN binding request or TURN relay. The `/api/ice` response still includes STUN and TURN so that connections across different networks (including internet play) work without any code-path changes in the client.

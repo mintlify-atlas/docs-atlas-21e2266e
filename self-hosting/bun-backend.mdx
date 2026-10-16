@@ -1,0 +1,134 @@
+---
+title: "Self-Host SkillTanki with Bun and Redis"
+sidebarTitle: "Bun Backend"
+description: "Run the SkillTanki backend on any VPS using Bun, Hono, Redis, MongoDB, and MinIO. Supports multi-process horizontal scaling without sticky sessions."
+---
+
+`packages/backend` is the self-hosted alternative to the Cloudflare Worker. It implements the same REST and WebSocket protocol — `GET/POST /api/rooms`, `GET /api/ice`, `/ws/room/:id`, `/assets/*` — so the mobile client connects to either backend without modification. Run it on any Linux VPS behind an nginx reverse proxy.
+
+## Stack
+
+| Component | Role |
+|-----------|------|
+| **Bun + Hono** | HTTP server and WebSocket upgrades; one OS process per port |
+| **Redis** | Live room state (JSON), the lobby index, the TURN credential cache, and pub/sub fan-out between processes |
+| **MongoDB** | Room journal: every `created`, `playing`, `finished`, and `purged` event is written here for auditing |
+| **MinIO** | Stores the ~180 MB game asset tree; the backend proxies them at `/assets/*` |
+
+Redis is the shared bus: because all room state and signalling messages travel through it, any process can serve any player. No sticky sessions are needed.
+
+## First run
+
+<Steps>
+  <Step title="Start the backing services">
+    Start Redis, MongoDB, and MinIO with the provided Docker Compose file:
+
+    ```bash
+    npm run services -w skilltanki-backend
+    ```
+
+    This runs `docker compose -f packages/backend/docker/docker-compose.yaml up -d`. The services start on their default ports:
+
+    | Service | Port |
+    |---------|------|
+    | Redis | 6379 |
+    | MongoDB | 27017 |
+    | MinIO (API) | 9000 |
+    | MinIO (console) | 9001 |
+
+    The MinIO console at [http://localhost:9001](http://localhost:9001) uses the default credentials `minioadmin` / `minioadmin`. Change these in production via `CC_MINIO_ACCESSKEY` and `CC_MINIO_SECRETKEY`.
+  </Step>
+  <Step title="Upload game assets to MinIO">
+    Pull the Git LFS asset tree if you have not already, then seed the MinIO bucket. The uploader checks MD5 hashes and skips files already present, so re-running is safe:
+
+    ```bash
+    git lfs pull
+    npm run upload-assets -w skilltanki-backend
+    ```
+  </Step>
+  <Step title="Configure the environment">
+    Copy the example file and edit it for your setup:
+
+    ```bash
+    cp packages/backend/.env.example packages/backend/.env
+    ```
+
+    At a minimum, review the Redis, MongoDB, and MinIO connection settings. Bun loads `.env` automatically on start. See [Configuration](/self-hosting/configuration) for the full variable reference.
+  </Step>
+  <Step title="Start the development server">
+    Run a single backend process on port 30050 with hot reload:
+
+    ```bash
+    npm run dev:backend
+    ```
+
+    The process starts the HTTP/WebSocket server and the in-process sweeper that prunes stale rooms.
+  </Step>
+  <Step title="Connect the game client">
+    Point the Vite dev server at your backend:
+
+    ```bash
+    CC_API_PROXY=http://localhost:30050 npm run dev:mobile
+    ```
+
+    Open [http://localhost:5173](http://localhost:5173). The Vite proxy forwards `/api`, `/ws`, and `/assets` to the backend process.
+  </Step>
+</Steps>
+
+## Production supervisor
+
+For production, `npm run start -w skilltanki-backend` starts a **supervisor process** that forks one worker process per declared port. By default the ports are `30050`, `30051`, and `30052`:
+
+```bash
+npm run start -w skilltanki-backend
+```
+
+The supervisor watches its children and respawns any that crash — other processes keep accepting connections while the crashed one restarts. The `--bootstrap` argument controls the port list:
+
+```bash
+# Custom port list (passed internally by the start script):
+bun src/index.ts --bootstrap=30050,30051,30052
+```
+
+Each forked process receives its assigned port via `--port` and whether it is the first port (and therefore runs the sweeper) via `--firstPort`. The `--firstPort` process owns the Redis sweeper that prunes expired seats, purges empty rooms, and drops stale lobby listings.
+
+<Note>
+  The `npm run dev:backend` command (used during development) runs a single process on `:30050` with `bun --watch`. The sweeper runs inside that single process.
+</Note>
+
+## Scaling
+
+Because nothing is process-local except the WebSocket file descriptors, you can scale horizontally without any special routing:
+
+- **Multiple processes on one machine:** the default supervisor setup (30050, 30051, 30052) is enough for most deployments. nginx balances over them with `least_conn`.
+- **Multiple machines:** point all backends at the same Redis (and MongoDB and MinIO). Set a unique `CC_REDIS_PREFIX` per logical deployment if you share one Redis instance across environments.
+
+Every process heartbeats a Redis key (`<prefix>:proc:<id>`) with a 10-second TTL. The sweeper (running on the `--firstPort` process) checks liveness on every sweep. If a process crashes and sends no `SIGTERM` close frames, the sweeper detects the dead heartbeat within one TTL (10 s) plus one sweep interval (2 s) and triggers `peerLeft` / host election for every socket that was on the dead process.
+
+## PWA shell
+
+The backend can serve the compiled PWA shell itself, eliminating the need for nginx to handle static files (useful in simpler deployments or during development):
+
+1. Build the shell:
+   ```bash
+   npm run build:mobile
+   ```
+2. Set `CC_WWWROOT_PATH` to the output directory:
+   ```bash
+   CC_WWWROOT_PATH=apps/mobile/dist npm run start -w skilltanki-backend
+   ```
+
+The API routes (`/api/*`, `/ws/*`, `/assets/*`) are matched first. Every other request falls through to the static file handler, which returns `index.html` for unknown paths (SPA fallback).
+
+For production, serving the shell through nginx is recommended — it handles gzip, immutable caching for hashed chunks, and HTTP/2 more efficiently. See [nginx & Production](/self-hosting/nginx-and-production).
+
+## Graceful shutdown
+
+When the process receives `SIGTERM` or `SIGINT` (a systemd stop, pm2 restart, or Ctrl-C):
+
+1. Every open WebSocket is closed with code `1001 server restart`. The client receives a normal close and reconnects — landing on another process behind the balancer, or on the respawned process if it comes up quickly.
+2. The process waits up to **2 seconds** for the departure events to propagate through Redis pub/sub so peer-left notifications reach other processes before the presence key disappears.
+3. The process drops its presence key (`<prefix>:proc:<id>`) immediately, so the sweeper and other processes know it is gone.
+4. The HTTP server and all store connections (Redis, MongoDB, MinIO) are closed cleanly, and the process exits with code `0`.
+
+When the **supervisor** receives `SIGTERM`, it sends `SIGTERM` to all child processes and waits for them to finish without respawning — a clean coordinated stop.

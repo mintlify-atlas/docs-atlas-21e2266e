@@ -1,0 +1,207 @@
+---
+title: "Rooms: Creating and Joining Multiplayer Battles"
+sidebarTitle: "Rooms"
+description: "SkillTanki rooms are public or private lobbies holding up to 12 players. Learn how to create, join, list, and configure rooms via the REST API."
+---
+
+Rooms are the fundamental unit of multiplayer in SkillTanki. Each room is a lobby that holds up to **12 players** in a full WebRTC mesh — every tank connected directly to every other. When human players do not fill all seats, bots can be added to round out the battle. The backend creates and tracks rooms in Redis; the players connect to each other over WebRTC data channels with no battle traffic passing through the server.
+
+---
+
+## Room phases
+
+Every room moves through a fixed set of phases during its lifetime, expressed by the `RoomPhase` type from the wire protocol:
+
+```typescript
+export type RoomPhase = 'open' | 'playing' | 'finished';
+```
+
+| Phase | Meaning |
+|-------|---------|
+| `open` | The lobby is waiting for players to join and ready up. The host has not started the battle yet. |
+| `playing` | The battle is in progress. The host peer sends a `listing` message with `phase: 'playing'` when the battle starts and again on the first kill (which restarts the clock). |
+| `finished` | The battle duration has elapsed or the host reported it over. The room listing is visible in the lobby but flagged as finished. |
+
+The host peer is always responsible for updating the server-side listing phase by sending a `ListingMessage` over the signalling socket:
+
+```typescript
+// Host → server: announce a phase change
+{ t: 'listing', phase: 'playing' }
+```
+
+---
+
+## Public vs private rooms
+
+Rooms are either **public** (listed in the lobby for anyone to join) or **private** (protected by a password, marked with a lock icon). The `RoomListing` type carries a `locked` boolean — `true` when the room was created with a password.
+
+```typescript
+locked: boolean   // true → password required; a lock icon is shown in the lobby
+```
+
+A private room is still returned by `GET /api/rooms` and `GET /api/rooms/:id`; the `locked` flag tells the client to prompt for a password before connecting. The password itself is **never** sent in the listing.
+
+---
+
+## Creating a room
+
+Send a `POST /api/rooms` with a JSON body that conforms to `CreateRoomRequest`:
+
+```typescript
+/** What POST /api/rooms takes. */
+export interface CreateRoomRequest {
+  mode: BattleModeId;        // 'dm' | 'tdm' | 'ctf' | 'assault'
+  mapId: string;
+  mapName: string;
+  host: string;              // call sign of the creator (display only)
+  maxPlayers?: number;       // 2–12; defaults to 12 for every mode
+  durationMs?: number;       // 15 000–600 000 ms; null → mode default
+  password?: string;         // omit for a public room; max 32 characters
+}
+```
+
+The server responds with `201 Created` and the new room's ID:
+
+```json
+{ "status": "ok", "id": "a3f2c1d4-..." }
+```
+
+The creator then joins the room over the signalling socket at `/ws/room/:id` — the `POST` only registers the listing; the creator becomes the host peer by connecting first over WebSocket.
+
+### Fields
+
+<ParamField body="mode" type="BattleModeId" required>
+  The battle mode. One of `dm` (Deathmatch), `tdm` (Team Deathmatch), `ctf` (Capture the Flag), or `assault` (Assault). The `explore` mode is client-only and is mapped to `dm` before the request is sent.
+</ParamField>
+
+<ParamField body="mapId" type="string" required>
+  The internal identifier of the map (e.g. `island_old_summer`). Must match a key in the game's asset tree.
+</ParamField>
+
+<ParamField body="mapName" type="string" required>
+  The human-readable map name shown in the lobby listing (max 60 characters).
+</ParamField>
+
+<ParamField body="host" type="string" required>
+  The call sign of the player creating the room. Stored in the listing for display only; the creator is still identified by their peer connection over the socket. Max 20 characters.
+</ParamField>
+
+<ParamField body="maxPlayers" type="number">
+  The player cap for this room. Must be between `2` and `12` (the full-mesh ceiling). Omit to use the per-mode default of `12`.
+</ParamField>
+
+<ParamField body="durationMs" type="number">
+  Battle length in milliseconds. Must be between `15 000` (15 s) and `600 000` (10 min). Omit or pass `null` to use the server's default. The client UI offers 5, 10, 15, and 20 minute presets.
+</ParamField>
+
+<ParamField body="password" type="string">
+  Omit for a public room. When present, all joining players must supply this password in their `join` WebSocket message. Maximum 32 characters. Setting a password sets `locked: true` in the listing.
+</ParamField>
+
+---
+
+## Room listing
+
+`GET /api/rooms` returns all non-stale rooms as an array. An optional `?mode=` query string filters by `BattleModeId`. Each element is a `RoomListing`:
+
+```typescript
+/** A room as the lobby shows it (never carries the password). */
+export interface RoomListing {
+  id: string;
+  mode: BattleModeId;
+  mapId: string;
+  mapName: string;
+  host: string;
+  players: number;
+  maxPlayers: number;
+  phase: RoomPhase;
+  locked: boolean;
+  createdAt: number;
+  updatedAt: number;
+  playingSince: number | null;
+  durationMs: number | null;
+}
+```
+
+<ResponseField name="id" type="string">
+  UUID of the room. Use this as the `:id` segment in `/ws/room/:id` and `/api/rooms/:id`.
+</ResponseField>
+
+<ResponseField name="mode" type="BattleModeId">
+  The battle mode: `dm`, `tdm`, `ctf`, or `assault`.
+</ResponseField>
+
+<ResponseField name="mapId" type="string">
+  Internal map identifier (e.g. `island_old_summer`).
+</ResponseField>
+
+<ResponseField name="mapName" type="string">
+  Human-readable map name for display in the lobby.
+</ResponseField>
+
+<ResponseField name="host" type="string">
+  Call sign of the player who created the room.
+</ResponseField>
+
+<ResponseField name="players" type="number">
+  Current number of connected human players (bots are not counted here).
+</ResponseField>
+
+<ResponseField name="maxPlayers" type="number">
+  The player cap set at creation, between 2 and 12.
+</ResponseField>
+
+<ResponseField name="phase" type="RoomPhase">
+  Current lifecycle phase: `open`, `playing`, or `finished`.
+</ResponseField>
+
+<ResponseField name="locked" type="boolean">
+  `true` when the room requires a password. The password itself is never returned.
+</ResponseField>
+
+<ResponseField name="createdAt" type="number">
+  Unix timestamp (ms) of room creation.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="number">
+  Unix timestamp (ms) of the most recent listing update (player join/leave, phase change).
+</ResponseField>
+
+<ResponseField name="playingSince" type="number | null">
+  Unix timestamp (ms) when the battle clock last started — set when the host sends `listing playing` at `START` and again on the first kill. `null` while the room is still `open`.
+</ResponseField>
+
+<ResponseField name="durationMs" type="number | null">
+  Battle length in milliseconds. `null` means the server's default. A playing room older than `playingSince + durationMs` is treated as finished by the lobby.
+</ResponseField>
+
+---
+
+## Room lifecycle
+
+Understanding the lifecycle helps when operating the self-hosted backend.
+
+1. **Creation** — `POST /api/rooms` writes the listing into Redis with a TTL of **twice the listing-stale time** (default `2 × 600 s = 1 200 s`). The room is immediately visible in the lobby.
+
+2. **Active** — every time the host sends a `listing` message (phase change, player count after a mesh event), the backend refreshes the Redis TTL and updates `updatedAt`. A listing whose `updatedAt` is older than `CC_LISTING_STALE_MS` (default **600 seconds**) is considered stale and omitted from `GET /api/rooms`.
+
+3. **Empty grace** — if all players disconnect and the room becomes empty, it is kept alive for `CC_EMPTY_GRACE_MS` (default **60 seconds**) to allow players to reconnect. After the grace period with no new connections the room is purged from Redis.
+
+4. **Finished / abandoned** — once `phase` is `finished`, or once the last player leaves and the grace period expires, the room is removed. There is no archive; completed room data is written to MongoDB by the self-hosted backend for analytics only.
+
+| Parameter | Default | Environment variable |
+|-----------|---------|----------------------|
+| Listing stale threshold | 600 000 ms (10 min) | `CC_LISTING_STALE_MS` |
+| Empty grace period | 60 000 ms (60 s) | `CC_EMPTY_GRACE_MS` |
+| Redis key TTL | `2 × CC_LISTING_STALE_MS` | — (derived) |
+
+---
+
+## Bots
+
+Bots are opt-in and configured per room at the time the host starts the battle — they are not part of the `CreateRoomRequest`.
+
+- **Default**: `0` bots per room. Players fill seats first; bots only supplement when the host explicitly adds them at start time.
+- **Maximum**: `12` bots can be added on top of human players. In practice the total (players + bots) is still capped at 12 per the mesh ceiling, but the client constant `CC_ROOM_MAX_BOTS = 12` governs the UI cap.
+- **Distribution**: bot brains run on the players' own devices. The host spreads them as evenly as possible across all connected peers at start time — with 3 players and 4 bots that is roughly 2 / 1 / 1 bots per machine.
+- **Mid-battle**: if a human player leaves during a battle their tank is handed to a bot brain running on one of the remaining players' machines. This is automatic and does not require the original host to be alive (see [Host Migration](/multiplayer/host-migration)).

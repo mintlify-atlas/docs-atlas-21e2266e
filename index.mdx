@@ -1,20 +1,69 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "SkillTanki: Free Browser Tank Arcade"
+sidebarTitle: "Home"
+description: "SkillTanki is a free, open-source browser tank arcade. No registration, no pay-to-win — pick your tank and drop into battle in seconds."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+SkillTanki is a browser-based tank arcade built in the spirit of the 2010 classic. Open the page, pick a call sign and a tank, and you're in a battle within seconds — no account, no downloads, no shop. Everything is unlocked from the start: 7 hulls, 9 turrets, 101 paints, and 91 maps across five battle modes. Play solo against smart bots, invite friends to a private room, or jump into an open public match.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Learn what SkillTanki is, how the project is structured, and how to run it locally.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get the game running locally in minutes — Cloudflare dev or self-hosted backend.
+  </Card>
+  <Card title="Gameplay" icon="gamepad" href="/gameplay/modes">
+    Explore battle modes, hulls, turrets, supplies, maps, and controls.
+  </Card>
+  <Card title="Multiplayer" icon="users" href="/multiplayer/rooms">
+    Understand how WebRTC rooms, host migration, and reconnect work.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What's in the game
+
+<CardGroup cols={3}>
+  <Card title="7 Hulls" icon="shield-halved">
+    From the fast glass-cannon Wasp to the slow fortress Mammoth.
+  </Card>
+  <Card title="9 Turrets" icon="crosshairs">
+    Smoky, Twins, Railgun, Ricochet, Thunder, Shaft, Firebird, Freeze, Isida.
+  </Card>
+  <Card title="5 Modes" icon="flag">
+    Deathmatch, Team DM, Capture the Flag, Assault, and Explore.
+  </Card>
+  <Card title="91 Maps" icon="map">
+    Summer and winter variants, every one open from the start.
+  </Card>
+  <Card title="Smart Bots" icon="robot">
+    Pathfinding AI with mode-aware tactics and per-difficulty tuning.
+  </Card>
+  <Card title="PWA" icon="mobile">
+    Install to your home screen. Touch, keyboard, and gamepad all work at once.
+  </Card>
+</CardGroup>
+
+## Deploy it yourself
+
+SkillTanki ships two interchangeable backends. The client speaks the same REST + WebSocket protocol to both.
+
+<CardGroup cols={2}>
+  <Card title="Cloudflare Worker" icon="cloud" href="/self-hosting/cloudflare-backend">
+    Edge deployment with Durable Objects, KV, R2, and Workers Static Assets — one origin, zero servers.
+  </Card>
+  <Card title="Self-Hosted (Bun)" icon="server" href="/self-hosting/bun-backend">
+    Run on any VPS with Bun, Redis, MongoDB, and MinIO behind nginx.
+  </Card>
+</CardGroup>
+
+## Explore the API
+
+<CardGroup cols={2}>
+  <Card title="API Overview" icon="rectangle-terminal" href="/api/overview">
+    The full REST + WebSocket protocol shared by both backends.
+  </Card>
+  <Card title="Signalling Protocol" icon="signal" href="/api/signalling">
+    WebSocket message types for peer discovery and WebRTC negotiation.
+  </Card>
+</CardGroup>

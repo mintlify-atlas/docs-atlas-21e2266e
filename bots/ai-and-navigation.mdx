@@ -1,0 +1,119 @@
+---
+title: "Bot AI Architecture: Pathfinding and Tactics"
+sidebarTitle: "AI & Navigation"
+description: "SkillTanki bots use a navigation grid built from map geometry at load time, A* pathfinding, and mode-specific tactical strategies with team coordination."
+---
+
+The bot AI is split across two di-kit modules. **`lib/tanki`** is the battle orchestrator: it owns the physics scene, the game state, and the supply and spawn rules. **`lib/engine`** is the dedicated bot engine: pathfinding, tactics, team coordination, and personas. The two modules share world data exclusively through typed interfaces in `src/model/engine/` — `lib/engine` never imports `src/engine/*` (the physics) directly. A `NavWorldAdapter` and a `BattleViewAdapter` in `lib/tanki` implement those interfaces against the live scene, keeping the boundary clean and making `lib/engine` portable to a Web Worker or a server simulation.
+
+<Note>
+The engine module (`src/engine/`) is a TypeScript port of the original ActionScript 3 physics from the 2010 classic. The same suspension model, ray-cast collision, and tank dynamics that ran in the Flash client have been faithfully reproduced in TypeScript, so the handling feel — the rocking over bumps, the momentum on ice, the shove from a side collision — is identical to the original.
+</Note>
+
+---
+
+## Navigation grid (`NavGrid`)
+
+Before a battle starts, `NavGridBuildService` walks the map's collision geometry and constructs a walkability grid. The build runs in chunks of at most 8 ms per frame during the "Navigation" loading phase so the main thread stays responsive. The result is cached in IndexedDB keyed by `(mapId, algorithm version, assets.json hash)`; a cached grid loads in zero time on subsequent visits.
+
+**Grid layout.** Each cell is **100 world units** (approximately 1 metre). The grid is stored entirely in typed arrays (`Int32Array`, `Float32Array`, `Uint8Array`) to avoid GC pressure during pathfinding. A column is a stack of *levels* — one per distinct floor height at that (x, y) position. Multi-storey maps like `deathtrack` (~8 levels) and `madness` (~20 platforms) are represented naturally.
+
+**Level classification.** For each column the builder fires rays downward repeatedly from the top of the bounding box, starting below the previous hit each time. A level is accepted as walkable when the surface normal satisfies `normal.z ≥ cos(45°)`. Surfaces between `cos(60°)` and `cos(45°)` (roughly 45–60° slope) are marked **marginal** — passable at a cost penalty of ×3. Anything steeper is a **wall** and is excluded. A headroom check then fires a ray upward from the floor surface; a level is rejected as **low** if the clearance to the next ceiling is less than the tank height (220 units).
+
+**Void detection.** Water has no collision geometry and map edges have no walls — the bot engine detects these as void by finding columns that cast no ray hit down to `killZ` (Island's kill plane is at roughly −10 300 units). A BFS from every void and wall cell assigns a **clearance** value to each node: the number of cells to the nearest drop or obstacle. Nodes with `clearance < 2` (about one tank half-width, 165 units) are marked impassable, keeping bots away from ledge edges.
+
+**Graph edges.** After the grid is built, `NavGraphService` connects neighbouring columns (8 directions). An edge is valid when either `|Δz| ≤ 40` (step-up) or `Δz / distance ≤ tan(45°)` (ramp — 37° slopes pass, 58°+ cliff profiles do not). Downward drops of 40–250 units generate **one-directional edges** (a bot can jump down but not climb back up); these carry a cost penalty. Edge cost = `1 + slope penalty + clearance penalty (< 2 cells) + one-direction penalty`.
+
+**Performance.** Island (141 shapes) builds in under 100 ms. The heaviest maps — `babylon` (7 518 shapes), `deathtrack`, `madness` — build in 1–5 seconds in chunks with the cache key preventing a second build on reload. The grid for the largest maps fits in under 8 MB of typed-array memory.
+
+---
+
+## Path following (`PathFollower`)
+
+`PathFollowService` implements a **pure-pursuit** controller. On each tick it picks a *lookahead point* on the smoothed path:
+
+```
+lookahead = clamp(300 + speed × 0.4, 300, 700)
+```
+
+The turn command is proportional to the heading error to that point. Throttle is modulated by path curvature (a sharp bend cuts speed to ~50 %) and by proximity to a void (clearance < 1 cell ahead reduces throttle to 50 % and triggers a committed turn away from the edge). When the next waypoint is directly behind the tank and within 400 units, the bot engages **reverse mode** instead of turning around on the spot.
+
+**Ramp handling.** The traversal rules mirror the physics engine's suspension model: slopes under 45° are driven normally; the 45–60° marginal band is approached with caution (higher cost, lower speed); anything above 60° is treated as a wall and excluded from the graph. Ramps on real maps are large single planes at 16–37°, well within the passable band.
+
+**Flipped-tank recovery.** If the hull's roof-up flag is set, the bot pauses all driving input and waits to be righted by the physics engine (the suspension springs eventually flip an overturned tank back). After recovery the path follower resets its state.
+
+**Stuck recovery.** `StuckRecoveryService` monitors heading change between ticks. A hull that is not rotating is likely wedged — not merely stopped. Once stuck time exceeds the threshold, the bot: (1) selects the nearest passable grid cell *behind* it from the nav grid, (2) reverses toward it, (3) marks the blocking spot so future A* requests add a cost penalty there, and (4) requests a fresh path. Three consecutive vetoes at the same grid position promote it to a learned block for the remainder of the battle.
+
+---
+
+## Bot personas (`BotPersona`)
+
+Every bot gets a **persona** at battle start, generated by `personaFor(difficulty, rng)` in `BotPersona.ts`. The difficulty sets the centre of each trait; a seeded RNG applies ±20 % noise so bots at the same difficulty play differently from each other and from battle to battle.
+
+```ts
+// From src/classes/engine/BotPersona.ts
+const BASE: Record<BotDifficulty, Omit<BotPersona, 'kind'>> = {
+  easy:   { aggression: 0.5, caution: 0.8, teamwork: 0.3, patience: 0.3, accuracy: 0.7,  mobility: 0   },
+  normal: { aggression: 0.6, caution: 0.5, teamwork: 0.6, patience: 0.5, accuracy: 1,    mobility: 0.3 },
+  hard:   { aggression: 0.7, caution: 0.3, teamwork: 0.9, patience: 0.7, accuracy: 1.35, mobility: 0.8 },
+};
+```
+
+Each persona is then stamped with a **kind**:
+
+| Kind | Adjustments |
+|---|---|
+| `rusher` | +0.25 aggression, −0.2 caution, −0.3 patience, +0.15 mobility |
+| `balanced` | No adjustment (most common — drawn twice vs. once each for rusher/sniper) |
+| `sniper` | −0.2 aggression, +0.3 patience, +0.15 accuracy, −0.3 mobility |
+
+Persona traits feed directly into the utility planner. `accuracy` scales the aim-error magnitude and target-lag offset. `caution` sets the health fraction at which the bot retreats and uses a repair kit (e.g. `caution: 0.8` on easy means retreating at 80 % health; `0.3` on hard means fighting to the wire). `teamwork` controls how long an attacker waits at the staging point for a buddy. `patience` governs willingness to sit in an ambush position at a chokepoint. `mobility` ≥ 0.5 enables jinking — a sideways shuffle at hold distance while firing.
+
+---
+
+## Mode strategies
+
+Each game mode gets its own strategy class. The strategy answers one question per tick: *what objective should this bot pursue right now?* The navigator and gunner then execute that objective the same way regardless of mode.
+
+<CardGroup cols={2}>
+  <Card title="DeathmatchStrategy" icon="crosshairs">
+    Every player is a valid target. The strategy calls `huntKnown(team)` — hunt the nearest enemy whose position is known, either because the bot has direct line of sight or because a teammate reported it via the `Blackboard`. If no enemy is known, the bot roams to a random reachable point. All bots are assigned the `hunter` role.
+  </Card>
+  <Card title="TeamDeathmatchStrategy" icon="users">
+    Extends DM with ally awareness. Before hunting the nearest known enemy, the strategy scans for any wounded ally (health ≤ 50 %) with a known enemy within 2 500 units of that ally and within 6 000 units of the bot itself. That threat-to-ally becomes the priority target. When no enemy is known, all bots advance toward the enemy team's spawn centroid together rather than scattering independently.
+  </Card>
+  <Card title="CtfStrategy" icon="flag">
+    Roles are auctioned every second: every third bot (by slot index) becomes a `defender`; the rest are `attacker`. The carrier runs home via the route farther from recent sightings (`saferRoute`). Attackers spread across alternate base-to-base routes on large maps (minimum route length 12 000 units) so they do not all file into the same chokepoint. Near the flag, an attacker stages 1 600 units back if outnumbered at the pedestal (`GUARD_STAGE_COUNT = 2`) or if it is wounded and a repair kit is ready, waiting up to 4 000 ms before abandoning the wait. Escort slots ride 600 units ahead and 500 units behind the carrier. The interceptor cuts to the predicted intercept point on the enemy carrier's planned route.
+  </Card>
+  <Card title="AssaultStrategy" icon="shield-halved">
+    Mirrors CTF with reversed flag semantics — the carrier delivers *your own* flag to the *enemy* base. Roles alternate: every second bot (by slot) is a `defender` guarding the enemy's delivery point; the rest are `attackers` pushing toward your own flag spawn. Escort positions and intercept logic are identical to CTF. A defender that chases its way within 2 200 units of the enemy flag opportunistically picks it up rather than driving home empty.
+  </Card>
+</CardGroup>
+
+---
+
+## Team coordination (`Blackboard`)
+
+In team modes, every bot on the same side shares a **`Blackboard`** — a single object owned by `BlackboardService` and read by every strategy through the `TeamContext` interface. The board is written every tick and holds:
+
+- **Sightings** — `Map<actorId, Sighting>` of all enemies known to the team. A sighting carries the last seen position, the time it was recorded, and a `confidence` value that decays over 6 seconds. After 6 seconds the bot goes to the last known position rather than the current one, which means a player can break contact by ducking behind cover.
+- **Roles** — `Map<actorId, SquadRole>` assigned by `RoleAuctionService`. Roles are re-auctioned every 1 second using a greedy priority order: `carrier` (whoever holds the flag) → `escortFront` / `escortRear` (two nearest by path distance) → `interceptor` (best interception geometry) → `defenders` (one per three bots) → `hunters`.
+- **Carrier path** — the carrier's current planned path, shared so escort positions can be projected 600 units ahead and 500 units behind along the actual route rather than guessing.
+- **Intercept path** — `InterceptService` runs A* from the enemy carrier to its destination and finds the first node where a friendly bot's path is shorter than the carrier's remaining path. That node is the intercept point, published on the board.
+- **Threat layer** — a cost-layer overlay built by `ThreatMapService` from enemy presence (decay 10 s), recent allied deaths (decay 20 s), and exposure to known positions. The carrier and medic plan paths with threat weight ×3; hunters use ×1; the interceptor uses ×0.5 to take risks.
+
+Teammates also share sighting reports like a radio: when one bot sees an enemy, the position is written to the `Blackboard` immediately and all other bots on that team treat it as a known location (at the reported confidence level).
+
+**Escort body-block.** When `EscortService` detects an enemy with line of sight to the carrier, the nearest escort drives onto the segment between the enemy and the carrier — a body-block — and opens fire. The carrier simultaneously uses nitro (if the supply is ready) and retreats to a nearby cover spot if health drops below 40 %.
+
+---
+
+## Debug overlay
+
+Add `?debug=nav` to the URL in your browser to enable the navigation grid overlay, rendered by `NavDebugService` through PlayCanvas debug lines. The overlay draws:
+
+- **Walkable cells** in green, **marginal cells** in yellow, **void edges** in red
+- **Active bot paths** as blue polylines updated each tick
+- **Role labels** floating above each bot's turret
+
+This overlay is only active in development builds (`import.meta.env.DEV`). The `globalThis.engine` object exposed in the browser console gives programmatic access to the engine's services for live inspection.

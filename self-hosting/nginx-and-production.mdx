@@ -1,0 +1,159 @@
+---
+title: "Production Setup: nginx Reverse Proxy for SkillTanki"
+sidebarTitle: "nginx & Production"
+description: "Put nginx in front of three SkillTanki Bun processes for TLS, HTTP/2, static file serving, WebSocket proxying, and 30-day asset caching."
+---
+
+`config/nginx.conf` at the repo root is the recommended reverse proxy for `packages/backend`. It handles TLS termination, HTTP/2, the PWA shell, WebSocket upgrades, and a 30-day on-disk asset cache — leaving the Bun processes to focus on API and signalling traffic.
+
+<Note>
+  These instructions assume you have already started the backend under its
+  supervisor (`npm run start -w skilltanki-backend`) and built the PWA shell
+  (`npm run build:mobile`). See [Bun Backend](/self-hosting/bun-backend) for
+  those steps.
+</Note>
+
+## nginx responsibilities
+
+The nginx config in `config/nginx.conf` divides every incoming request into four buckets:
+
+| Path | Handled by | Notes |
+|------|-----------|-------|
+| `/` (and any unknown path) | nginx — `apps/mobile/dist` | Static files; SPA fallback to `index.html` |
+| `/api/*` | Bun processes (`least_conn`) | Lobby REST; `Cache-Control: no-store` |
+| `/ws/*` | Bun processes (`least_conn`) | WebSocket upgrade; 120 s idle timeout |
+| `/assets/*` | Bun → MinIO (cached by nginx) | 30-day on-disk proxy cache |
+
+**TLS termination** — nginx handles the TLS handshake and forwards plain HTTP to the Bun processes on localhost. The processes never see encrypted traffic. TLS 1.2 and 1.3 are allowed; earlier versions are rejected.
+
+**PWA shell** — `apps/mobile/dist` is served directly by nginx as static files. No Bun process is involved for shell requests. Hashed JS/CSS chunks (e.g. `/app/abc123.js`) get a one-year immutable cache header; the entry points (`index.html`, `manifest.webmanifest`, `sw.js`) get `no-cache` so updates are always fetched.
+
+**WebSocket upgrades** — the `Upgrade` and `Connection` headers are forwarded correctly using a `map` block. The read and send timeouts are both set to 120 seconds, matching the backend's own idle timeout. A phone that sleeps and wakes within two minutes will not have its socket dropped by nginx.
+
+**Asset caching** — nginx maintains a 2 GB on-disk proxy cache (`/var/cache/nginx/skilltanki-assets`) for `/assets/*`. A 200 response is cached for 30 days; a 404 is cached for one minute. The cache key is the URI only (no query string), and `proxy_cache_lock` ensures a cold miss is only fetched once even under concurrent requests for the same file.
+
+## Three-process setup
+
+The supervisor launched by `npm run start -w skilltanki-backend` forks one process per port in the bootstrap list. The default bootstrap is `30050,30051,30052`:
+
+```nginx
+upstream skilltanki_backend {
+    # Fewest active connections first: a WebSocket counts as one for its
+    # whole life, so new players spread over the processes evenly.
+    least_conn;
+    server 127.0.0.1:30050 max_fails=3 fail_timeout=10s;
+    server 127.0.0.1:30051 max_fails=3 fail_timeout=10s;
+    server 127.0.0.1:30052 max_fails=3 fail_timeout=10s;
+    keepalive 64;
+}
+```
+
+`max_fails=3 fail_timeout=10s` means nginx marks a process as unavailable for 10 seconds after three consecutive connection failures, routing around a crashed process while the supervisor respawns it.
+
+`keepalive 64` enables HTTP/1.1 keep-alive between nginx and the Bun processes, reducing connection overhead for the short-lived `/api/` requests.
+
+## No sticky sessions
+
+Any Bun process can serve any player at any time. Room state (JSON), the lobby index, TURN cache entries, and signalling messages all live in Redis and travel over its pub/sub — nothing is process-local except the open WebSocket file descriptors.
+
+`least_conn` distributes new connections to whichever process has the fewest active ones. Because each WebSocket counts as one connection for its entire life, a player who joins and holds a WebSocket for a full 10-minute battle is correctly counted, and new joiners are sent to less-loaded processes.
+
+A player who disconnects and reconnects with a rejoin token may land on a **different process** from the one that held their original socket — and that is fine. The new process looks up the seat in Redis, validates the token, and issues a `welcome` message exactly as the original process would have.
+
+## HTTPS
+
+<Tip>
+  Use [Certbot](https://certbot.eff.org/) with the nginx plugin to get a free
+  Let's Encrypt certificate. Run it once, and it installs a systemd timer that
+  renews the certificate automatically before it expires.
+
+  ```bash
+  sudo apt install certbot python3-certbot-nginx
+  sudo certbot --nginx -d play.example.com
+  ```
+
+  Certbot fills in the `ssl_certificate` and `ssl_certificate_key` directives
+  in your nginx config automatically.
+</Tip>
+
+The relevant directives in `config/nginx.conf` that Certbot will populate (or that you can fill in manually for a custom certificate):
+
+```nginx
+ssl_certificate     /etc/letsencrypt/live/play.example.com/fullchain.pem;
+ssl_certificate_key /etc/letsencrypt/live/play.example.com/privkey.pem;
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+```
+
+The HTTP server block in the config redirects all plain-HTTP traffic to HTTPS (except for Certbot's `.well-known/acme-challenge/` paths, which stay on port 80):
+
+```nginx
+server {
+    listen 80;
+    server_name play.example.com;
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://$host$request_uri; }
+}
+```
+
+HTTPS is required for the PWA: service workers, the home-screen install prompt, and WebRTC media permissions all require a secure origin.
+
+## Installing the nginx config
+
+1. Copy the config and edit the two placeholders (`play.example.com` and the path to `apps/mobile/dist`):
+
+    ```bash
+    sudo cp config/nginx.conf /etc/nginx/sites-available/skilltanki
+    ```
+
+2. Open `/etc/nginx/sites-available/skilltanki` and replace:
+   - `play.example.com` → your domain
+   - `/srv/skilltanki/apps/mobile/dist` → the absolute path to your `apps/mobile/dist`
+
+3. Enable the site and reload:
+
+    ```bash
+    sudo ln -s /etc/nginx/sites-available/skilltanki /etc/nginx/sites-enabled/
+    sudo nginx -t
+    sudo systemctl reload nginx
+    ```
+
+## Process manager
+
+<Note>
+  Run the supervisor under **pm2** or a **systemd service** so it restarts
+  automatically after a reboot or an unexpected exit.
+
+  **pm2 example:**
+  ```bash
+  pm2 start "npm run start -w skilltanki-backend" --name skilltanki-backend
+  pm2 save
+  pm2 startup   # installs the systemd/init hook for the current user
+  ```
+
+  **systemd example** (`/etc/systemd/system/skilltanki-backend.service`):
+  ```ini
+  [Unit]
+  Description=SkillTanki backend supervisor
+  After=network.target
+
+  [Service]
+  Type=simple
+  WorkingDirectory=/srv/skilltanki
+  ExecStart=npm run start -w skilltanki-backend
+  Restart=on-failure
+  RestartSec=5s
+  EnvironmentFile=/srv/skilltanki/packages/backend/.env
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+  When the supervisor process itself crashes, pm2 or systemd restarts it and
+  the supervisor re-forks all three worker processes. If a single worker
+  crashes while the supervisor is healthy, the supervisor respawns just that
+  worker — the other two keep running. The sweeper (on the first-port process)
+  detects the dead process's heartbeat key within one TTL (10 s) plus one sweep
+  interval (2 s) and triggers `peerLeft` and host election for any seats that
+  were held on the dead process, so players are reconnected cleanly.
+</Note>

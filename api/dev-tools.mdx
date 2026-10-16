@@ -1,0 +1,136 @@
+---
+title: "SkillTanki Development Tools and Debug Aids"
+sidebarTitle: "Dev Tools"
+description: "Browser console globals, URL query parameters for debugging, headless bot benchmarks, mock room fixtures, and the virtual gamepad simulator."
+---
+
+SkillTanki exposes several development aids in the browser console and via URL query parameters. These are active while the game is running in a local dev build (`npm run dev:mobile`) — none of them are stripped in production, but they're only useful when you have a game page open.
+
+## Console Globals
+
+Three service containers are attached to `globalThis` and are accessible directly from the browser DevTools console while the game is running:
+
+| Global | Contents |
+|---|---|
+| `globalThis.tanki` | The game's main service container: battle, UI, and controls. Use this to inspect live battle state, fire game events, or poke individual services. |
+| `globalThis.online` | The multiplayer service container, covering room membership, WebRTC peer connections, signalling, and host migration state. |
+| `globalThis.engine` | The bot engine service container. Exposes the navigation grid, per-bot AI state, role assignments, and the internal blackboard shared by team bots. |
+
+```js
+// Example: inspect the current battle service via the console
+globalThis.tanki       // explore services with autocomplete
+globalThis.online      // inspect peer list and connection state
+globalThis.engine      // check bot navigation and AI state
+```
+
+The containers use `di-kit` for dependency injection; you can resolve individual services by their token from the console if needed.
+
+## URL Query Parameters
+
+Append these to the local game URL (`http://localhost:5173`) to activate specific development modes. Parameters can be combined.
+
+<AccordionGroup>
+  <Accordion title="?bench — Headless bot battle benchmark">
+    **Syntax:** `?bench=<mode>&map=<id>&bots=<n>&seconds=<s>&seed=<n>`
+
+    Runs a fully headless battle (no rendering, no sound) and prints a JSON report to the console when the timer expires. All parameters except `bench` are optional and fall back to sensible defaults.
+
+    | Parameter | Description |
+    |---|---|
+    | `bench` | Battle mode to run: `dm`, `tdm`, `ctf`, `assault`, or `explore` |
+    | `map` | Map ID from `assets/maps.json`, e.g. `island_old_summer` |
+    | `bots` | Number of bots (1–11) |
+    | `seconds` | Battle duration in seconds |
+    | `seed` | RNG seed for reproducible runs |
+
+    The JSON report includes: drownings, flag captures, stuck events, path failures, and per-tick simulation time. See [Bench Mode](#bench-mode) below for a full worked example.
+  </Accordion>
+
+  <Accordion title="?rooms=mock — Mock rooms list fixture">
+    **Syntax:** `?rooms=mock`
+
+    Replaces the live backend rooms list with a static fixture of fake rooms. Use this when working on the lobby UI layout — no backend or active players are required.
+  </Accordion>
+
+  <Accordion title="?gamepad=sim — Virtual gamepad simulator">
+    **Syntax:** `?gamepad=sim`
+
+    Opens a virtual gamepad popup driven by the mouse pointer. The simulated input is published through the real browser Gamepad API, so the game reads it identically to a physical controller. Use this to test gamepad controls, button mappings, and menu navigation on a desktop without a hardware gamepad.
+  </Accordion>
+
+  <Accordion title="?debug=nav — Navigation grid overlay">
+    **Syntax:** `?debug=nav`
+
+    Renders the bot navigation grid on top of the current map. Each cell is colour-coded by traversability: passable tiles, blocked tiles, water/cliff edges, and dynamically-blocked cells (spots a stuck tank has flagged as impassable). Useful when tuning bot pathfinding or debugging movement failures on a new map geometry.
+  </Accordion>
+</AccordionGroup>
+
+## Bench Mode
+
+The bench URL parameter is the primary tool for validating bot AI changes without sitting through a manual game. It runs the full simulation at maximum speed with no rendering overhead and produces a machine-readable report.
+
+**Example command:**
+
+```
+http://localhost:5173/?bench=ctf&map=island_old_summer&bots=6&seconds=180&seed=1
+```
+
+This runs a 3-minute Capture the Flag battle on Island with 6 bots, using RNG seed `1` for reproducibility. Open the browser console to see progress and the final JSON report.
+
+**Report fields:**
+
+| Field | Description |
+|---|---|
+| `drownings` | Number of tanks that fell into water or off the map |
+| `captures` | Flag captures (CTF/Assault modes) |
+| `stuck` | Stuck events: times a bot triggered the stuck-tank recovery routine |
+| `pathFailures` | Pathfinding failures: navigation requests that returned no path |
+| `tickTimeMs` | Average simulation tick time in milliseconds |
+
+Run the same seed before and after an AI change to compare the reports and confirm there are no regressions in path quality or stuck frequency.
+
+## E2E Signal Tests
+
+The signalling and lobby protocol is covered by an end-to-end test script that spins up two fake peers and walks them through the full connection lifecycle: create room → join → offer/answer/ICE relay → host migration → rejoin with token → room purge after grace period.
+
+<CodeGroup>
+```bash Cloudflare backend (apps/server)
+npm run test:signal
+```
+
+```bash Self-hosted backend (packages/backend)
+npm run test:backend
+```
+</CodeGroup>
+
+`npm run test:signal` runs `apps/server/scripts/test-signal.mjs` against the Cloudflare Worker dev server (wrangler on `:8787` by default). `npm run test:backend` runs the same script from `packages/backend/scripts/test-signal.mjs` against the Bun backend on `:30050`.
+
+Both scripts exit `0` on success and `1` on any failure, printing the failing assertion. The Cloudflare version can also take a URL argument to test a staging or production URL:
+
+```bash
+node apps/server/scripts/test-signal.mjs https://your-worker.workers.dev
+```
+
+**What the test covers:**
+
+- `POST /api/rooms` — valid and invalid create requests
+- `GET /api/ice` — TURN credential endpoint
+- `/ws/room/:id` — WebSocket join, `welcome`, `peerJoined` messages
+- Offer/answer/ICE relay in both directions
+- Signal to unknown peer returns `error: unknown_peer`
+- Non-host attempting phase change returns `error: not_host`
+- Host disconnect triggers `hostChanged` with an incremented `hostEpoch`
+- Rejoin with the original token restores the same `peerId`
+- Room removed from lobby listing after the empty-grace timeout
+
+## TypeScript Checks
+
+Run the full project typecheck (all three packages — mobile client, Cloudflare server, self-hosted backend) in one command:
+
+```bash
+npm run typecheck
+```
+
+This runs `tsc --noEmit` against `apps/mobile`, `apps/server`, and `packages/backend` in sequence. Each package is independent and builds on its own; a type error in one does not prevent the others from being checked.
+
+Run this before opening a PR to catch any type regressions introduced by cross-cutting changes.

@@ -1,0 +1,104 @@
+{
+  "projectType": "saas",
+  "projectName": "SkillTanki",
+  "projectDescription": "A free, open-source browser tank arcade — no registration required — featuring 7 hulls, 9 turrets, 91 maps, smart bots, and peer-to-peer multiplayer via WebRTC, deployable as a Cloudflare Worker or self-hosted with Bun + Redis.",
+  "theme": "almond",
+  "primaryColor": "#8ee07c",
+  "lightColor": "#545249",
+  "darkColor": "#c4b5a7",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guide",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Gameplay",
+            "pages": [
+              "gameplay/modes",
+              "gameplay/tanks",
+              "gameplay/supplies-and-maps",
+              "gameplay/controls"
+            ]
+          },
+          {
+            "group": "Multiplayer",
+            "pages": [
+              "multiplayer/rooms",
+              "multiplayer/webrtc-and-ice",
+              "multiplayer/host-migration"
+            ]
+          },
+          {
+            "group": "Bots",
+            "pages": [
+              "bots/overview",
+              "bots/ai-and-navigation"
+            ]
+          },
+          {
+            "group": "Self-Hosting",
+            "pages": [
+              "self-hosting/cloudflare-backend",
+              "self-hosting/bun-backend",
+              "self-hosting/configuration",
+              "self-hosting/nginx-and-production"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Backend Protocol",
+            "pages": [
+              "api/overview",
+              "api/rooms",
+              "api/ice",
+              "api/signalling"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "api/dev-tools",
+              "api/asset-pipeline"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "No registration or pay-to-win — everything unlocked from the first second",
+    "7 hulls (Wasp, Hornet, Hunter, Viking, Dictator, Titan, Mammoth) and 9 turrets",
+    "5 battle modes: Deathmatch, Team Deathmatch, Capture the Flag, Assault, Explore",
+    "91 maps with summer and winter variants, open from the start",
+    "Peer-to-peer WebRTC full-mesh multiplayer (up to 12 tanks per room)",
+    "Smart AI bots with pathfinding, mode-aware tactics, and per-difficulty tuning",
+    "PWA installable on mobile — touch, keyboard, and gamepad support",
+    "Two interchangeable backends: Cloudflare Workers (edge) and Bun + Redis (self-hosted)",
+    "Host migration, reconnect/rejoin, and TURN relay out of the box",
+    "Free unlimited supplies (repair, armour, damage, nitro, nuclear) with shared cooldowns"
+  ],
+  "publicApiSurface": [
+    "GET /api/rooms?mode=<dm|tdm|ctf|assault>",
+    "POST /api/rooms — CreateRoomRequest body",
+    "GET /api/rooms/:id",
+    "POST /api/rooms/:id/republish",
+    "GET /api/ice — returns IceServer[]",
+    "GET /health_check",
+    "WS /ws/room/:id — signalling socket (join, signal, listing, leave, welcome, peerJoined, peerLeft, hostChanged, error)",
+    "GET /assets/* — game assets (maps, hulls, turrets, textures, sounds)",
+    "CC_WWWROOT_PORT, CC_REDIS_HOST/PORT/USER/PASSWORD, CC_MONGO_CONNECTION_STRING, CC_MINIO_ENDPOINT/PORT/ACCESSKEY/SECRETKEY/BUCKET",
+    "CC_EMPTY_GRACE_MS, CC_REJOIN_TTL_MS, CC_LISTING_STALE_MS",
+    "CC_ICE_STUN_URLS, CC_ICE_TURN_URL/USERNAME/CREDENTIAL, CC_CF_TURN_KEY_ID/API_TOKEN/TTL_S"
+  ]
+}

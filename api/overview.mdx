@@ -1,0 +1,92 @@
+---
+title: "SkillTanki Backend API Overview"
+sidebarTitle: "Overview"
+description: "The SkillTanki backend exposes a REST API for lobby management and a WebSocket endpoint for WebRTC signalling. Both backends implement the same protocol."
+---
+
+## What the backend does
+
+The SkillTanki backend is a **thin matchmaker**. It never touches game simulation — no physics, no damage, no authoritative game state lives here. Its job is to:
+
+1. Maintain a lobby index of open rooms.
+2. Accept peer connections over WebSocket and relay WebRTC signalling (offers, answers, ICE candidates) between them.
+3. Serve ICE server credentials so peers can punch through NAT.
+
+Once two peers complete ICE negotiation they exchange tank commands directly over WebRTC DataChannels. The **host peer** (the connected peer with the lowest `joinSeq`) is the sole authority for damage, deaths, flags, and the battle clock. The server is not in that loop at all.
+
+### Two implementations, one protocol
+
+| Implementation | Runtime | Default dev port |
+|---|---|---|
+| **Bun backend** (`packages/backend`) | Bun + Hono, Redis, MongoDB, MinIO | `30050` |
+| **Cloudflare Worker** (`apps/server`) | Cloudflare Workers + Durable Objects + KV | `8787` (Wrangler) |
+
+Both implement the wire contract defined in `protocol.ts` — they speak exactly the same REST bodies and WebSocket message shapes. A client written against one works against the other.
+
+---
+
+## Base URL
+
+```
+https://<your-domain>          # production
+http://localhost:8787           # Cloudflare Worker (wrangler dev)
+http://localhost:30050          # Bun backend (bun dev)
+```
+
+---
+
+## Endpoints at a glance
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/rooms` | List open rooms, optionally filtered by mode |
+| `POST` | `/api/rooms` | Create a new room |
+| `GET` | `/api/rooms/:id` | Get a single room by ID |
+| `POST` | `/api/rooms/:id/republish` | Re-stamp a room's listing in the lobby index |
+| `GET` | `/api/ice` | Fetch ICE server config for WebRTC |
+| `GET` | `/health_check` | Liveness probe |
+| `WS` | `/ws/room/:id` | Signalling socket for a room |
+| `GET` | `/assets/*` | Serve game asset files |
+
+---
+
+## Content-Type
+
+All REST endpoints accept and return `application/json`. Send a `Content-Type: application/json` header on every `POST` request body.
+
+---
+
+## Error model
+
+When a request fails, the backend responds with a JSON body in this shape:
+
+```json
+{
+  "status": "error",
+  "code": "room_not_found",
+  "message": "room_not_found"
+}
+```
+
+The HTTP status code is determined by the error code:
+
+| `code` | HTTP status | Meaning |
+|--------|-------------|---------|
+| `bad_request` | 400 | Malformed or missing request fields |
+| `room_not_found` | 404 | No room exists with the given ID |
+| `unknown_peer` | 404 | Peer ID not recognised in this room |
+| `room_full` | 409 | Room has reached `maxPlayers` |
+| `bad_password` | 403 | Wrong or missing room password |
+| `bad_token` | 403 | Reconnect token is invalid or expired |
+| `not_host` | 403 | Operation requires the caller to be room host |
+| `finished` | 410 | Room has already finished |
+
+Anything that maps to none of the above is a `500` and indicates a server bug — the body will contain `{ "status": "error", "code": "internal" }`.
+
+On the **signalling socket**, errors arrive as a JSON `{ "t": "error", "code": "…", "message": "…" }` frame instead of an HTTP response. A failed `join` also triggers a WebSocket close with code `4000`.
+
+---
+
+## Authentication
+
+The backend has **no authentication layer**. Any client can list rooms, create rooms, or connect to the signalling socket. Rooms use an optional `password` field for access control — the password is never included in listing responses.

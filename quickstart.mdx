@@ -1,47 +1,183 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get SkillTanki Running Locally in Minutes"
+sidebarTitle: "Quickstart"
+description: "Run SkillTanki locally with the Cloudflare dev backend or the self-hosted Bun backend. Covers install, asset seeding, and first battle."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+SkillTanki ships two fully interchangeable backends. **Option A** uses Wrangler's local emulation of Cloudflare Workers — no extra infrastructure, just Node and npm. **Option B** runs the self-hosted Bun backend against real Redis, MongoDB, and MinIO containers via Docker Compose. Pick the path that matches what you want to develop or deploy, then follow the steps below to reach your first local battle.
 
 ## Prerequisites
 
-Before you begin, you must have:
+All paths require:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+- **Node 22** and **npm** (workspaces are used at the repo root)
+- **git-lfs** — game assets (maps, textures, sounds) are stored in git-lfs and must be pulled before seeding
 
-## Get started
+The **self-hosted path (Option B)** additionally requires:
+
+- **Bun 1.2+** — runtime for `packages/backend`
+- **Docker** (with Compose) — starts Redis, MongoDB, and MinIO
+
+<Warning>
+  Run `git lfs pull` immediately after cloning. Without it the files in `assets/` are stub pointers — not real game data — and the asset-upload step will silently seed empty files into R2 or MinIO.
+</Warning>
+
+## Option A: Cloudflare Worker dev
+
+Wrangler emulates Durable Objects, KV, and R2 locally. No Cloudflare account is needed for development.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Install dependencies">
+    Install all workspace packages from the repo root:
 
     ```bash
-    npm install your-package
+    npm install
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+  <Step title="Start the Cloudflare Worker dev server">
+    Wrangler compiles `apps/server` and starts a local Worker on port **8787**:
 
     ```bash
-    your-cli init
+    npm run dev:server
+    ```
+
+    Leave this terminal running. The Vite dev server (next step) proxies `/api`, `/ws`, and `/assets` to `:8787` automatically.
+  </Step>
+  <Step title="Seed the local R2 bucket (once)">
+    Upload the contents of `assets/` into Wrangler's local R2 emulation. The script uses md5 checksums, so re-running it only uploads changed files:
+
+    ```bash
+    npm run upload-assets -- --local
+    ```
+
+    You only need to do this once (or after pulling new asset commits via `git lfs pull`).
+  </Step>
+  <Step title="Start the game client">
+    Start the Vite dev server. The PWA is served at **http://localhost:5173**:
+
+    ```bash
+    npm run dev:mobile
+    ```
+
+    Open the URL in your browser, pick a call sign and tank, and start a battle.
+  </Step>
+</Steps>
+
+## Option B: Self-hosted Bun backend
+
+This path runs `packages/backend` — the production-equivalent Bun server — locally. It requires Docker for the data stores.
+
+<Steps>
+  <Step title="Install dependencies">
+    ```bash
+    npm install
     ```
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+  <Step title="Start backing services">
+    Docker Compose brings up Redis, MongoDB, and MinIO:
 
     ```bash
-    your-cli start
+    npm run services -w skilltanki-backend
     ```
+
+    The containers are defined in `packages/backend/docker/docker-compose.yaml`. They will keep running in the background until you stop them with `docker compose down`.
+  </Step>
+  <Step title="Seed MinIO with game assets (once)">
+    Upload `assets/` into the local MinIO bucket. Like the R2 uploader, this is md5-skipping:
+
+    ```bash
+    npm run upload-assets -w skilltanki-backend
+    ```
+  </Step>
+  <Step title="Start the Bun backend">
+    Start `packages/backend` in watch mode on port **30050**:
+
+    ```bash
+    npm run dev:backend
+    ```
+  </Step>
+  <Step title="Start the game client pointed at the Bun backend">
+    The `CC_API_PROXY` environment variable tells the Vite dev server to proxy backend traffic to the Bun process instead of Wrangler:
+
+    ```bash
+    CC_API_PROXY=http://localhost:30050 npm run dev:mobile
+    ```
+
+    Open **http://localhost:5173** to play.
   </Step>
 </Steps>
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+  `CC_API_PROXY` is the single switch between backends. Set it to `http://localhost:30050` to route through the Bun backend, or leave it unset to use the Wrangler-emulated Cloudflare Worker. The client code is identical either way — both backends speak the same protocol.
 </Tip>
+
+## Verification
+
+Run type checks and end-to-end signal tests to confirm everything is wired correctly:
+
+<CodeGroup>
+```bash Type-check all packages
+# Runs tsc --noEmit for apps/mobile, apps/server, and packages/backend
+npm run typecheck
+```
+
+```bash E2E: Cloudflare backend
+# Two fake peers through lobby creation, join, signalling, host migration,
+# and rejoin — against the local Wrangler dev server
+npm run test:signal
+```
+
+```bash E2E: self-hosted backend
+# The same scenario against packages/backend on :30050
+# (requires the Bun backend to be running)
+npm run test:backend
+```
+
+```bash Bot benchmark battle
+# Opens a headless CTF battle on island_old_summer with 6 bots for 3 minutes.
+# Reports tick time, drownings, flag captures, stuck events, and path failures.
+open "http://localhost:5173/?bench=ctf&map=island_old_summer&bots=6&seconds=180&seed=1"
+```
+</CodeGroup>
+
+All three `typecheck` targets and both signal tests should pass before you open a pull request. The benchmark URL is useful for catching bot-AI or physics regressions — a `seed` value makes the run deterministic.
+
+## Deploy to Cloudflare
+
+When you are ready to push to production, two commands are all that is needed. You will need a Cloudflare account with the R2 bucket (`skilltanki-mobile-assets`) created and `wrangler login` completed.
+
+<Steps>
+  <Step title="Upload assets to R2 (once)">
+    Push the `assets/` directory to the production R2 bucket. The md5-skip logic means this is fast on subsequent runs — only changed files are uploaded:
+
+    ```bash
+    npm run upload-assets
+    ```
+
+    This step only needs to be repeated when new maps, textures, or sounds are added to the repo.
+  </Step>
+  <Step title="Build and deploy the Worker">
+    This single command builds the PWA shell into `build/public`, then calls `wrangler deploy` to bundle `apps/server` and publish the Worker (with the shell as Workers Static Assets) in one step:
+
+    ```bash
+    npm run deploy
+    ```
+
+    After the deploy completes, the game is live at `https://mobile.skilltanki.workers.dev/` (or your custom domain).
+  </Step>
+</Steps>
+
+For the **self-hosted production path**, build the shell separately and run the backend under its supervisor:
+
+```bash
+# Build the PWA shell
+npm run build:mobile                       # output: apps/mobile/dist/
+
+# Start the Bun supervisor (one process per port: 30050, 30051, 30052)
+npm run start:backend
+
+# Put config/nginx.conf in front — it proxies /api/, /ws/, /assets/ and
+# serves the shell from apps/mobile/dist directly via nginx
+```
+
+See `config/nginx.conf` in the repo root for the recommended TLS, WebSocket, and asset-caching configuration.
